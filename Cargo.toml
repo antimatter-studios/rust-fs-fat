@@ -1,0 +1,14 @@
+[package]
+name = "rust-fs-fat32"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+description = "Read-only FAT12, FAT16 and FAT32 filesystem driver"
+repository = "https://github.com/antimatter-studios/rust-fs-fat"
+
+[lib]
+name = "fs_fat32"
+
+[dependencies]
+rust-fs-core = "=0.4.3"
