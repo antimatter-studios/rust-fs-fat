@@ -3,7 +3,9 @@
 pub mod boot;
 pub mod directory;
 pub mod file;
+pub mod mkfs;
 pub mod primitives;
+pub mod timestamp;
 pub mod volume;
 pub mod write;
 

@@ -53,6 +53,24 @@ at the same time corrupts it, and it cannot tell. The caller keeps exclusive acc
 build or repair a volume byte by byte. It is not a mount: nothing is validated or flagged, and it
 writes any bytes anywhere in its range.
 
+## Formatting
+
+`mkfs::format` (and `format_path`, for an image file it creates or grows) writes an empty FAT12,
+FAT16 or FAT32 volume of a given size, at an offset within the device if asked. The variant is not
+a field of the volume: the number of data clusters decides it (up to 4084 is FAT12, 4085 to 65524 is
+FAT16, 65525 or more is FAT32). Left to choose, `plan` picks FAT12 up to 16 MiB, FAT16 below
+512 MiB and FAT32 from there, with the smallest cluster size that puts the count in range (the usual
+cluster-size table for FAT32). A variant that is asked for and cannot form at that size is refused
+with an error that says why, not turned into another. It writes the BPB, every FAT copy, an empty
+root directory, and for FAT32 the FSInfo sector and the backup boot sector and FSInfo, and leaves the
+data area alone. Defaults: 512-byte sectors, two FATs, 1 reserved sector (32 for FAT32), 512 root
+entries for FAT12/16, media 0xF8, a serial from the clock.
+
+`tests/format_oracle.rs` formats images from FAT12 through FAT32, including the cluster counts at
+both ends of each variant (4084, 4085, 65524 and 65525), 1024- and 4096-byte sectors and one FAT
+copy, then requires `fsck.fat -n` to report each clean and the Linux kernel's vfat driver to mount it
+read-only with the cluster size, cluster count and free count the layout planned.
+
 Run the driver tests with:
 
 ```sh
@@ -147,7 +165,8 @@ chains including fragmented files, and that nothing is written. `tests/cli_indep
 runs the command-line tool as a process on the same images and compares it with the same
 oracles; `tests/cli.rs` and `tests/cli/` run it on two small volumes formatted by
 `mkfs.fat` and filled by mtools (`validation/make-cli-samples.sh`). The oracle tests run in
-the Linux test VM (`chore test:oracle`) and in CI's `oracle` job.
+the Linux test VM (`chore test:oracle`) and in CI's `oracle` job. The formatter is checked the same way by
+`tests/format_oracle.rs` (see Formatting).
 
 Not validated: any Windows tool, the macOS FAT implementation, FAT with 1024-, 2048- or
 4096-byte sectors, volumes larger than the 40 MiB fixtures, or damage beyond the recipes in

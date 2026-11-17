@@ -19,12 +19,12 @@ tasks:
       - cargo test --locked --features cli
 
   test:oracle:
-    desc: "Independent validation: mkfs.fat, fsck.fat, mtools and the kernel's vfat driver check the driver, in the Linux test VM (sibling ../fs-linux-test-harness, v0.7.1)"
+    desc: "Independent validation: mkfs.fat, fsck.fat, mtools and the kernel's vfat driver check the driver and the formatter, in the Linux test VM (sibling ../fs-linux-test-harness, v0.7.1)"
     # `up` boots the shared guest and applies scripts/vm-setup.sh; the session
     # then detaches when cargo ends, however it ends, leaving the guest up.
     cmds:
       - ../fs-linux-test-harness/scripts/vm.sh up
-      - ../fs-linux-test-harness/scripts/vm.sh session cargo test --locked --features cli,oracle --test independent_validation --test cli_independent
+      - ../fs-linux-test-harness/scripts/vm.sh session cargo test --locked --features cli,oracle
 
   cli:install:
     desc: 'Build the command-line tool (release, --features cli) and stage it as an install prefix: tmp/cli/bin under every name, tmp/cli/share the man pages and completions'
