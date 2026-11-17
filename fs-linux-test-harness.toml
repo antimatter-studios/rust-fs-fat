@@ -1,0 +1,13 @@
+# fs-linux-test-harness consumer config (see ../fs-linux-test-harness/README.md).
+#
+# Every independent oracle for the FAT driver runs in the Linux guest:
+# mkfs.fat and fsck.fat (dosfstools), mtools as a second reader, and the
+# kernel's own vfat driver on a loop mount. Nothing is mounted on the host.
+[project]
+name = "rust-fs-fat"
+
+[setup]
+script = "scripts/vm-setup.sh"
+
+[share]
+dir = ".vm-share"

@@ -31,3 +31,42 @@ jobs:
         run: cargo test --locked
       - name: Check documentation
         run: cargo doc --locked --no-deps
+
+  oracle:
+    # The driver against mkfs.fat, fsck.fat, mtools and the kernel's vfat
+    # driver (validation/generate.sh, tests/independent_validation.rs). Runs
+    # natively as root on a Linux runner; locally the same tests run in the
+    # Linux test VM through `chore test:oracle`.
+    name: Independent oracles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.95.0
+          components: clippy
+      - name: Install the oracles
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dosfstools mtools openssl python3
+          sudo modprobe vfat || true
+          sudo modprobe loop || true
+      - name: Lint the oracle tests
+        run: cargo clippy --locked --all-targets --features oracle -- -D warnings
+      - name: Test against the oracles
+        env:
+          FAT_ORACLE_NATIVE: "1"
+        run: cargo test --locked --features oracle --test independent_validation
+      - name: Keep the oracle records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fat-oracle-records
+          path: |
+            target/fat-validation/*.fsck
+            target/fat-validation/*.manifest
+            target/fat-validation/*.recipe
+            target/fat-validation/tools.txt
+          if-no-files-found: ignore

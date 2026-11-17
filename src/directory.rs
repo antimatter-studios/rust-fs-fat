@@ -218,4 +218,22 @@ mod tests {
             "FOUND.TXT"
         );
     }
+
+    #[test]
+    fn nt_case_flags_lower_case_the_short_name_parts_they_cover() {
+        let entry = |flags: u8| {
+            let mut bytes = vec![0; 32];
+            bytes[..11].copy_from_slice(b"README  TXT");
+            bytes[11] = 0x20;
+            bytes[12] = flags;
+            parse_directory(&bytes, FatKind::Fat16)
+                .unwrap()
+                .remove(0)
+                .name
+        };
+        assert_eq!(entry(0x00), "README.TXT");
+        assert_eq!(entry(0x08), "readme.TXT");
+        assert_eq!(entry(0x10), "README.txt");
+        assert_eq!(entry(0x18), "readme.txt");
+    }
 }
