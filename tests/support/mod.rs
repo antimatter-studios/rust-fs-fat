@@ -2,6 +2,8 @@
 //! what is done to it, and small FAT images built byte by byte.
 #![allow(dead_code)]
 
+pub mod check;
+
 use fs_core::{BlockDevice, BlockRead, Error as CoreError, Result as CoreResult};
 use fs_fat32::FatKind;
 use std::sync::{Arc, Mutex};

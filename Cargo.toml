@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
-description = "Read-only FAT12, FAT16 and FAT32 filesystem driver"
+description = "FAT12, FAT16 and FAT32 filesystem driver, read-only unless mounted for writing"
 repository = "https://github.com/antimatter-studios/rust-fs-fat"
 
 [lib]
