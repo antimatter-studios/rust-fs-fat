@@ -7,6 +7,10 @@
 //! not skip.
 #![allow(dead_code)]
 
+pub mod scenario;
+pub mod sha256;
+
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Mutex;
@@ -203,4 +207,114 @@ fn parse_check(record: &str) -> Check {
         }
     }
     check
+}
+
+/// One entry as the kernel's vfat driver shows it.
+#[derive(Clone, Debug)]
+pub struct KernelEntry {
+    pub dir: bool,
+    pub size: u64,
+    pub mtime: f64,
+    pub ctime: f64,
+    pub atime: i64,
+    pub sha: String,
+}
+
+/// One entry as mtools copied it out.
+#[derive(Clone, Debug)]
+pub struct ToolsEntry {
+    pub dir: bool,
+    pub size: u64,
+    pub mtime: i64,
+    pub sha: String,
+}
+
+/// What `validation/inspect-image.sh` recorded about one image.
+#[derive(Debug, Default)]
+pub struct Inspect {
+    pub fsck_exit: i32,
+    pub fsck_output: String,
+    pub kernel_mounted: bool,
+    pub mount_error: String,
+    pub kernel: BTreeMap<String, KernelEntry>,
+    pub mtools_exit: i32,
+    pub mtools_error: String,
+    pub mtools: BTreeMap<String, ToolsEntry>,
+    pub mdir_exit: i32,
+}
+
+/// Runs the three independent tools over `images` (under `work`) in one call.
+/// Returns each image's record and the tool versions.
+pub fn inspect_images(work: &str, images: &[PathBuf]) -> (Vec<Inspect>, String) {
+    let paths: Vec<String> = images.iter().map(|p| tool_path(work, p)).collect();
+    exec_ok(&format!(
+        "bash validation/inspect-image.sh {}",
+        paths
+            .iter()
+            .map(|p| format!("'{p}'"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    ));
+    let tools = std::fs::read_to_string(images[0].parent().unwrap().join("tools.txt"))
+        .expect("tools.txt is written beside the images");
+    let records = images
+        .iter()
+        .map(|image| {
+            let bytes = std::fs::read(format!("{}.inspect", image.display()))
+                .unwrap_or_else(|e| panic!("no inspect record for {}: {e}", image.display()));
+            parse_inspect(&String::from_utf8_lossy(&bytes))
+        })
+        .collect();
+    (records, tools)
+}
+
+fn parse_inspect(record: &str) -> Inspect {
+    let mut inspect = Inspect::default();
+    for line in record.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        match fields[0] {
+            "fsck_exit" => inspect.fsck_exit = fields[1].parse().unwrap(),
+            "fsck_output" => {
+                inspect
+                    .fsck_output
+                    .push_str(fields.get(1).copied().unwrap_or(""));
+                inspect.fsck_output.push('\n');
+            }
+            "kernel_mount" => inspect.kernel_mounted = fields[1] == "ok",
+            "mount_error" => inspect
+                .mount_error
+                .push_str(fields.get(1).copied().unwrap_or("")),
+            "kernel" => {
+                inspect.kernel.insert(
+                    fields[7].to_string(),
+                    KernelEntry {
+                        dir: fields[1] == "d",
+                        size: fields[2].parse().unwrap(),
+                        mtime: fields[3].parse().unwrap(),
+                        ctime: fields[4].parse().unwrap(),
+                        atime: fields[5].parse().unwrap(),
+                        sha: fields[6].to_string(),
+                    },
+                );
+            }
+            "mtools_exit" => inspect.mtools_exit = fields[1].parse().unwrap(),
+            "mtools_error" => inspect
+                .mtools_error
+                .push_str(fields.get(1).copied().unwrap_or("")),
+            "mtools" => {
+                inspect.mtools.insert(
+                    fields[5].to_string(),
+                    ToolsEntry {
+                        dir: fields[1] == "d",
+                        size: fields[2].parse().unwrap(),
+                        mtime: fields[3].parse().unwrap(),
+                        sha: fields[4].to_string(),
+                    },
+                );
+            }
+            "mdir_exit" => inspect.mdir_exit = fields[1].parse().unwrap(),
+            _ => {}
+        }
+    }
+    inspect
 }

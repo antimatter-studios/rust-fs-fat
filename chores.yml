@@ -26,6 +26,16 @@ tasks:
       - ../fs-linux-test-harness/scripts/vm.sh up
       - ../fs-linux-test-harness/scripts/vm.sh session cargo test --locked --features cli,oracle
 
+  test:windows:
+    desc: "Windows' own chkdsk and file listing over volumes the driver wrote, in the Windows test VM of fs-windows-test-harness (not run in CI)"
+    # The guest is the harness's persistent Windows ARM64 VM: bring it up first
+    # with `python3 ../fs-windows-test-harness/scripts/local-vm.py up`. The test
+    # ships fixed VHDs over ssh/scp (the `fswth-local` host the harness writes to
+    # ~/.local/share/fs-windows-test-harness/arm64/ssh_config) and FAILS, never
+    # skips, when the guest cannot be reached.
+    cmds:
+      - cargo test --locked --features windows-oracle --test windows_oracle
+
   cli:install:
     desc: 'Build the command-line tool (release, --features cli) and stage it as an install prefix: tmp/cli/bin under every name, tmp/cli/share the man pages and completions'
     # The layout an install has: the multi-call binary as rust-fs-fat and each

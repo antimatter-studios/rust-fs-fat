@@ -55,6 +55,10 @@ cli = ["rust-fs-core/cli"]
 # kernel's vfat driver). They fail, never skip, when the oracles cannot run:
 # `chore test:oracle` provides them in the Linux test VM.
 oracle = []
+# Tests that need Windows chkdsk, in the Windows test VM of
+# fs-windows-test-harness: `chore test:windows`. They fail, never skip, when the
+# VM cannot be reached.
+windows-oracle = []
 
 [[test]]
 name = "independent_validation"
