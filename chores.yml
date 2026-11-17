@@ -16,7 +16,7 @@ tasks:
   test:
     desc: The VM-free unit tests
     cmds:
-      - cargo test --locked
+      - cargo test --locked --features cli
 
   test:oracle:
     desc: "Independent validation: mkfs.fat, fsck.fat, mtools and the kernel's vfat driver check the driver, in the Linux test VM (sibling ../fs-linux-test-harness, v0.7.1)"
@@ -24,4 +24,30 @@ tasks:
     # then detaches when cargo ends, however it ends, leaving the guest up.
     cmds:
       - ../fs-linux-test-harness/scripts/vm.sh up
-      - ../fs-linux-test-harness/scripts/vm.sh session cargo test --locked --features oracle --test independent_validation
+      - ../fs-linux-test-harness/scripts/vm.sh session cargo test --locked --features cli,oracle --test independent_validation --test cli_independent
+
+  cli:install:
+    desc: 'Build the command-line tool (release, --features cli) and stage it as an install prefix: tmp/cli/bin under every name, tmp/cli/share the man pages and completions'
+    # The layout an install has: the multi-call binary as rust-fs-fat and each
+    # dotted name a relative symlink to it. It prints the PATH line;
+    # `test:cli` tests whatever PATH finds, so that directory goes first.
+    cmds: ['bash scripts/cli-install.sh']
+
+  test:cli:
+    desc: 'The command-line tool AS INSTALLED, found on PATH: doctor first, then every tests/cli/test-*.sh'
+    # Tests the installed artifact, not a cargo target. `rust-fs-fat doctor`
+    # runs before anything is tested and fails the tier if a name is missing
+    # or shadowed, naming the fix. FLOOR: scripts/test-cli.sh sums each file's
+    # passes and fails a run that executed fewer than CLI_FLOOR.
+    cmds:
+      - 'PATH="$(bash scripts/cli-install.sh --print-bin-dir):$PATH" bash scripts/test-cli.sh'
+
+  test:cli:process:
+    desc: 'fs.fat as a process on the committed sample volumes (VM-free), and the unit tests of the binary'
+    cmds:
+      - cargo test --locked --features cli --test cli --bin rust-fs-fat
+
+  package:cli:
+    desc: 'The release tarball, built and checked by rust-fs-core package-cli, in tmp/package (needs a release build: chore cli:install)'
+    cmds:
+      - 'bash scripts/cli-install.sh >/dev/null && mkdir -p tmp/package && cd tmp/package && bash ../../scripts/core.sh package-cli "$(sed -n "s/^version = \"\(.*\)\"$/\1/p" ../../Cargo.toml | head -n 1)" "$(uname -s | tr A-Z a-z)-$(uname -m)" "${CARGO_TARGET_DIR:-../../target}/release"'

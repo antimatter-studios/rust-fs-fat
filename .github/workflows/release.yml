@@ -1,0 +1,69 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# EVERY JOB READS, AND ONE JOB WRITES. `contents: write` is held by the `cli`
+# job alone, which calls rust-fs-core's release-cli workflow; there, only its
+# `attach` job holds it, and that job checks nothing out. Every action is
+# pinned to a commit SHA, with the tag it stood for beside it: a tag is a
+# pointer its owner can move, and a job holding a token should not run
+# whatever it points at today. Every checkout sets `persist-credentials: false`.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: verify tag matches Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate_ver=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"(.*)"/\1/')
+          if [ "$tag" != "$crate_ver" ]; then
+            echo "tag $tag does not match Cargo.toml version $crate_ver" >&2
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets --features cli -- -D warnings
+      - run: cargo test --locked --features cli
+
+  # THE RELEASE TARBALL is rust-fs-core's release-cli workflow, called here as
+  # rust-fs-ntfs and rust-fs-exfat call it. It builds the multi-call binary
+  # natively on darwin-arm64 and linux-x86_64, packages it with
+  # scripts/package-cli.sh from what Cargo.toml's
+  # [package.metadata.package-cli] declares -- bin/rust-fs-fat, fs.fat as a
+  # relative symlink to it, the man pages and completions the binary writes,
+  # share/rust-fs-fat/CAVEATS and LICENSE -- and checks it; then its one write
+  # job attests both tarballs and attaches them to this tag's release.
+  #
+  # Pinned to a commit SHA, with the tag it stood for beside it. core-ref is
+  # the tag whose scripts the CI `cli` job also runs, and toolchain the one
+  # rust-toolchain.toml pins.
+  #
+  # A download is checked with `gh attestation verify <tarball> --repo
+  # antimatter-studios/rust-fs-fat --signer-workflow
+  # antimatter-studios/rust-fs-core/.github/workflows/release-cli.yml`.
+  cli:
+    needs: [test]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: antimatter-studios/rust-fs-core/.github/workflows/release-cli.yml@d912a0872de19fbbca4f68cf36540554ec398432 # v0.4.5
+    with:
+      core-ref: v0.4.5
+      toolchain: 1.95.0

@@ -1,0 +1,10 @@
+d	0	docs
+d	0	docs/deep
+f	18	README.TXT
+f	0	empty.dat
+f	1300	docs/Guide With Spaces.txt
+f	2000	docs/deep/leaf.bin
+chain	README.TXT	4
+chain	docs/Guide With Spaces.txt	7,8,9
+chain	docs/deep/leaf.bin	10,11,12,13
+deleted	gone.txt	700	chain	5,6
