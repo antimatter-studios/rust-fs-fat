@@ -91,8 +91,16 @@ fn agree(name: &str, view: &View, inspect: &Inspect, tools: &str) {
         );
         let (created, millis) = info.created.to_unix().expect("a real creation time");
         let created = created as f64 + f64::from(millis) / 1000.0;
+        // A kernel that keeps the 10 ms creation field reports it, and must agree to within that
+        // field. Newer kernels (7.0 on the CI runner) report whole seconds only; then the seconds
+        // must agree and the 10 ms part is not graded, because the oracle does not give it.
+        let tolerance = if entry.ctime.fract() == 0.0 {
+            1.0
+        } else {
+            0.011
+        };
         assert!(
-            (entry.ctime - created).abs() < 0.011,
+            (entry.ctime - created).abs() < tolerance,
             "{name}: {path}: creation time {} against {created}",
             entry.ctime
         );
