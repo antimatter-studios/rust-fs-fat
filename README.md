@@ -44,9 +44,31 @@ explicitly enables the shared contiguous-fallback hypothesis.
 
 ## Validation status
 
-The initial extraction passes its synthetic FAT12/16/32 tests. Independent
-formatter, reference-reader, and damaged real-volume validation are still pending.
-Passing these tests is not a claim of production-ready recovery on arbitrary media.
+The driver is checked against tools that do not share its code. `validation/generate.sh` builds
+FAT12, FAT16 and FAT32 images with `mkfs.fat` (dosfstools), fills them through the Linux kernel's
+vfat driver, and requires the kernel's view and an `mtools` (`mcopy`) copy to agree byte for byte.
+`tests/independent_validation.rs` then compares the driver with them: directory listings (nested
+directories, long and non-ASCII names, NT lower-case flags, a FAT12/16 fixed root, a chained FAT32
+root), file bytes, and cluster chains against `mshowfat`, including fragmented files. It also
+checks that each image is byte-identical after being read, on the error paths too.
+
+Damaged copies are built by recorded recipes (`generate.sh` lists them): deleted records, a
+truncated cluster chain, a missing boot signature, a zeroed boot sector, and a zero bytes-per-sector
+field. `fsck.fat` is the oracle that the damage is real. `RawVolume` reads every byte of each of
+them; `Volume` refuses the three boot-sector recipes, and refuses only the damaged file when a
+chain is truncated.
+
+Images are rebuilt from the recipe on each run and never committed. Run the tests in the Linux
+test VM with `chore test:oracle` (sibling `../fs-linux-test-harness`), or natively as root on Linux
+with `FAT_ORACLE_NATIVE=1 cargo test --features oracle --test independent_validation`; CI does the
+latter in its `oracle` job. Without the oracles those tests fail, they do not skip.
+
+Not yet validated: images with a non-zero partition offset or a 4096-byte sector, volumes larger
+than the generated 40 MiB, damaged FATs beyond one truncated chain, directory-loop and
+cross-linked-chain damage, and real damaged media. `Volume` is stricter than `fsck.fat` and the
+kernel about the boot signature: both accept an image whose `0x55 0xAA` is zeroed, `Volume::open`
+does not (use `RawVolume` for such a volume). Passing these tests is not a claim of
+production-ready recovery on arbitrary media.
 
 ## Development checks
 

@@ -137,8 +137,16 @@ fn short_name(raw: &[u8], deleted: bool) -> String {
     if deleted {
         base[0] = b'_';
     }
-    let base = String::from_utf8_lossy(&base).trim_end().to_string();
-    let extension = String::from_utf8_lossy(extension).trim_end().to_string();
+    let mut base = String::from_utf8_lossy(&base).trim_end().to_string();
+    let mut extension = String::from_utf8_lossy(extension).trim_end().to_string();
+    // Byte 12 holds the Windows NT case flags: an 8.3 name stored in upper
+    // case is shown in lower case where the flag for its part is set.
+    if raw[12] & 0x08 != 0 {
+        base.make_ascii_lowercase();
+    }
+    if raw[12] & 0x10 != 0 {
+        extension.make_ascii_lowercase();
+    }
     if extension.is_empty() {
         base
     } else {
