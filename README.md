@@ -4,7 +4,8 @@ The repository contains the complete FAT-family driver. The Rust package remains
 `rust-fs-fat32` and its library remains `fs_fat32` for compatibility with the existing
 Captain Salvage integration. No separate driver is needed for FAT12 or FAT16.
 
-Read-only FAT-family filesystem driver for FAT12, FAT16, and FAT32. One driver
+FAT-family filesystem driver for FAT12, FAT16, and FAT32, read-only unless a caller asks for a
+writable mount. One driver
 detects the variant from the BPB geometry; it does not treat the older formats
 as FAT32. Variant-specific FAT entry encoding and root-directory layout are
 handled behind shared APIs.
@@ -18,10 +19,39 @@ handled behind shared APIs.
   caller-supplied limits.
 - `FileAPI` lists valid root entries and opens files for bounded random-access
   reads. It does not write or repair the volume.
+- `write::WriteVolume` is the only way to change a volume (see below).
 
 `BootSector::parse` classifies the FAT variant using the standard data-cluster
 thresholds. `FatKind` remains available to callers that need to report or
 specialize on the on-disk format.
+
+## Write capability
+
+Reading is safe by construction: nothing a reader holds can write. `Volume`, `RawVolume`,
+`FileAPI` and `PrimitiveAPI` need only `fs_core::BlockRead`, and the read-only constructors
+(`open_device`, `open_raw_device`, `open_path`) wrap what they are given in a `ReadOnlyDevice`, so a
+device that could write is still never written through them. `tests/read_only_contract.rs` runs every
+read path, the error paths and a read that stops answering at each point, over a device that records
+any write, flush or resize, and requires none.
+
+A writer is reached only through an explicit constructor that needs a writable
+`fs_core::BlockDevice`: `write::open_writable`, `write::open_writable_path` or
+`WriteVolume::mount`. Mounting checks the geometry as reading does, and refuses (`Error::Dirty`)
+a volume whose dirty or error flags are set, because only a tool that checks and repairs a volume
+may clear them. For FAT16 and FAT32 those flags are the boot sector's state byte and the top bits of
+FAT entry 1; FAT12 has none, so a FAT12 volume cannot be checked for them. The mount sets both to
+dirty and flushes before its first change, and `unmount` flushes and clears them last, so a crash
+leaves the volume marked dirty. Mounting and closing without a change writes nothing. A change that
+fails after it wrote something leaves the mount failed and the volume dirty. Every write is bounded
+to the volume, is made as whole sectors, and reaches the device as it is made; `flush` and `unmount`
+ask the device to put it on stable storage.
+
+`WriteVolume` assumes it is the only user of the volume: a kernel mount or another process writing
+at the same time corrupts it, and it cannot tell. The caller keeps exclusive access.
+
+`write::open_raw_writable` and `RawWriteVolume` are a separate, low-level capability for tools that
+build or repair a volume byte by byte. It is not a mount: nothing is validated or flagged, and it
+writes any bytes anywhere in its range.
 
 Run the driver tests with:
 
