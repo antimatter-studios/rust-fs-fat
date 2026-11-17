@@ -1,0 +1,4 @@
+The library and fs.fat are read-only: nothing here formats, repairs or writes a volume.
+fs.fat reads FAT12, FAT16 and FAT32 images and raw devices; it never opens one for writing.
+Checked against mkfs.fat, fsck.fat, mtools and Linux's vfat driver, not against Windows' own tools.
+exFAT and NTFS are other drivers: fs.exfat and fs.ntfs.

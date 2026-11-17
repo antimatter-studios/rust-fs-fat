@@ -10,10 +10,47 @@ repository = "https://github.com/antimatter-studios/rust-fs-fat"
 [lib]
 name = "fs_fat32"
 
+# THE COMMAND-LINE TOOL: one multi-call binary, named for the repository, as
+# in every sibling driver (rust-fs-ntfs, rust-fs-exfat). It dispatches on
+# argv[0], so a release installs it once as `rust-fs-fat` and links each
+# dotted name to it (cargo refuses a dot in a target name). `rust-fs-fat fs
+# ...` is the form nothing else on PATH can shadow, and `cargo run --features
+# cli -- fs ...` works before anything is installed. The binary is behind the
+# `cli` feature, so `cargo build` and a dependent crate build the library and
+# nothing else: the library keeps no CLI dependency.
+[[bin]]
+name = "rust-fs-fat"
+path = "src/cli/main.rs"
+required-features = ["cli"]
+
+# WHAT THE RELEASE TARBALL SHIPS, read by rust-fs-core's package-cli
+# (`scripts/core.sh package-cli`, run by core's release-cli workflow and by
+# the pull-request `cli` job): every dotted name the binary answers to, with
+# its man section, and the licence files at the root. packaging/CAVEATS is
+# the default caveats file. Core checks the names against `rust-fs-fat
+# generate names`, so a tool added to the binary and not here fails the
+# package step.
+#
+# THE NAME IS `fs.fat`, AND dosfstools' NAMES ARE NOT USED. dosfstools owns
+# mkfs.fat, mkfs.vfat, mkfs.msdos, fsck.fat, fsck.vfat, fsck.msdos, fatlabel
+# and dosfslabel; none may be taken here, because a package installed beside
+# dosfstools would shadow the other's tool or be shadowed by it. `fs.fat` is
+# in neither dosfstools nor mtools (tests/cli_independent.rs checks both
+# packages' file lists). See README.md, "The command-line tool".
+[package.metadata.package-cli]
+names = { "fs.fat" = 1 }
+licenses = ["LICENSE"]
+
 [dependencies]
 rust-fs-core = "=0.4.3"
 
 [features]
+# The command-line tool and nothing else. The plumbing it shares -- dispatch,
+# --version, doctor, the output contract, man pages and completions -- is
+# rust-fs-core's `cli` feature, turned on only here, so the library gains
+# nothing. Its dependencies (clap, clap_complete, clap_mangen) are
+# MIT/Apache-2.0; README.md lists them.
+cli = ["rust-fs-core/cli"]
 # Tests that need the independent oracles (mkfs.fat, fsck.fat, mtools and the
 # kernel's vfat driver). They fail, never skip, when the oracles cannot run:
 # `chore test:oracle` provides them in the Linux test VM.
@@ -22,3 +59,15 @@ oracle = []
 [[test]]
 name = "independent_validation"
 required-features = ["oracle"]
+
+# The tool run as a process: against hand-built volumes everywhere, and, with
+# `oracle`, against the images mkfs.fat, the kernel and mtools produced.
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "cli_independent"
+path = "tests/cli_independent.rs"
+required-features = ["cli", "oracle"]

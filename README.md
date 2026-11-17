@@ -72,38 +72,97 @@ FAT32 roots follow their cluster chains. Allocation comes from the active FAT,
 not an invented on-disk bitmap. Cleared chains remain partial unless the person
 explicitly enables the shared contiguous-fallback hypothesis.
 
+## The command-line tool
+
+`rust-fs-fat` is one multi-call binary behind the `cli` cargo feature, so the library
+keeps no CLI dependency: `cargo build` builds the library alone. It dispatches on the
+name it is started as, the way the sibling drivers' tools do, and `rust-fs-fat fs ...`
+is the form nothing else on `PATH` can shadow. Its plumbing (dispatch, `--version`,
+`doctor`, the JSON-or-`--text` output, the structured error and exit statuses, man
+pages and completions) is `rust-fs-core`'s `cli` feature, the same for every driver.
+
+```sh
+cargo install rust-fs-fat32 --features cli
+fs.fat disk.img info                      # boot sector, variant, backup boot sector
+fs.fat disk.img ls -R /docs               # live entries; --limit and --max-depth bound the walk
+fs.fat disk.img cat /docs/guide.txt       # raw bytes on stdout
+fs.fat disk.img export /docs/guide.txt guide.txt --verify
+fs.fat disk.img scan --deleted -R /       # deleted records, raw bytes and where they are on disk
+fs.fat disk.img chain 7                   # the FAT chain from cluster 7, and why it stops
+fs.fat disk.img fat 2 --count 8           # FAT entries as stored
+fs.fat damaged.img info                   # what is wrong with the boot sector, and the backup
+fs.fat damaged.img --boot-sector 6 ls /   # read the volume through the FAT32 backup boot sector
+```
+
+Every verb opens the image read-only (a `FileDevice` wrapped again in `ReadOnlyDevice`)
+and never writes to it. `info` goes through `RawVolume` and needs no valid boot sector, so
+it answers for a damaged one; every other verb goes through the checked `Volume`, and
+refuses a volume whose boot sector does not hold up with exit 4, naming `--boot-sector`. `--boot-sector SECTOR` substitutes the boot sector found at that
+512-byte sector for sector 0, which is how a FAT32 volume with a destroyed sector 0 is
+read through its backup copy at sector 6. FAT12 and FAT16 keep no backup boot sector.
+The library lists only the root directory, so subdirectories and paths are resolved in
+the tool from `chain_candidates`, `read_cluster` and `parse_directory`; the library is
+unchanged.
+
+Output and exit statuses follow the shared contract: a result is JSON on stdout (or
+`--text`), a failure is `{"error": ..., "code": N}` on stderr, and `N` is the exit status
+(1 failed or not found, 2 wrong command line, 4 refused because of the volume's state).
+`scan` reports what the library's `scan_directory` keeps; it does not claim a deleted
+file's data is intact, and a deleted file's first cluster reads as free in the FAT.
+
+### The names, and why `fs.fat`
+
+dosfstools installs `mkfs.fat`, `mkfs.vfat`, `mkfs.msdos`, `fsck.fat`, `fsck.vfat`,
+`fsck.msdos`, `fatlabel` and `dosfslabel`, and a host that has it must keep them. So none of
+those names is used, and the tool shipped here is `fs.fat` (manual section 1), which is in
+neither dosfstools nor mtools: `tests/cli_independent.rs` checks both packages' file lists
+in the Linux test VM, and `scripts/test-cli.sh` runs `rust-fs-fat doctor` first so a
+shadowed name fails the tier. The release metadata (`[package.metadata.package-cli]`) lists
+exactly `fs.fat`, and the packaging step fails if the binary answers to another name.
+
+`mkfs`, file operations and the checker are separate work (#2 to #5) and are not part of
+this tool yet. Their dotted names are not chosen here beyond the constraint that they must
+not be any name above: `rust-fs-fat mkfs` and `rust-fs-fat fsck` work as verbs of the
+multi-call binary whatever dotted name they get. File operations are further verbs of
+`fs.fat` (one entry in `VERBS` in `src/cli/fs.rs`, one module, opening its own writable
+device); the formatter and the checker are further tools in `FAMILY.tools` in
+`src/cli/main.rs`.
+
+### Dependencies and licences
+
+Without the `cli` feature the only dependency is `rust-fs-core` (MIT). The feature adds
+`rust-fs-core`'s `cli` dependencies, all permissive: clap, clap_complete and clap_mangen
+(MIT or Apache-2.0), serde, serde_json and sha2 (MIT or Apache-2.0), signal-hook
+(Apache-2.0 or MIT), xattr, rustix, libc, errno and the other crates they pull in (MIT or
+Apache-2.0; memchr and winapi-util are Unlicense or MIT; strsim and zmij are MIT;
+unicode-ident adds Unicode-3.0). None is copyleft.
+
 ## Validation status
 
-The driver is checked against tools that do not share its code. `validation/generate.sh` builds
-FAT12, FAT16 and FAT32 images with `mkfs.fat` (dosfstools), fills them through the Linux kernel's
-vfat driver, and requires the kernel's view and an `mtools` (`mcopy`) copy to agree byte for byte.
-`tests/independent_validation.rs` then compares the driver with them: directory listings (nested
-directories, long and non-ASCII names, NT lower-case flags, a FAT12/16 fixed root, a chained FAT32
-root), file bytes, and cluster chains against `mshowfat`, including fragmented files. It also
-checks that each image is byte-identical after being read, on the error paths too.
+The driver passes its synthetic FAT12/16/32 tests, and
+`tests/independent_validation.rs` checks it against `mkfs.fat`, `fsck.fat`, mtools and
+the Linux kernel's vfat driver on images those tools built (clean, with deleted files, a
+truncated chain, and three kinds of damaged boot sector): listings, file bytes, cluster
+chains including fragmented files, and that nothing is written. `tests/cli_independent.rs`
+runs the command-line tool as a process on the same images and compares it with the same
+oracles; `tests/cli.rs` and `tests/cli/` run it on two small volumes formatted by
+`mkfs.fat` and filled by mtools (`validation/make-cli-samples.sh`). The oracle tests run in
+the Linux test VM (`chore test:oracle`) and in CI's `oracle` job.
 
-Damaged copies are built by recorded recipes (`generate.sh` lists them): deleted records, a
-truncated cluster chain, a missing boot signature, a zeroed boot sector, and a zero bytes-per-sector
-field. `fsck.fat` is the oracle that the damage is real. `RawVolume` reads every byte of each of
-them; `Volume` refuses the three boot-sector recipes, and refuses only the damaged file when a
-chain is truncated.
-
-Images are rebuilt from the recipe on each run and never committed. Run the tests in the Linux
-test VM with `chore test:oracle` (sibling `../fs-linux-test-harness`), or natively as root on Linux
-with `FAT_ORACLE_NATIVE=1 cargo test --features oracle --test independent_validation`; CI does the
-latter in its `oracle` job. Without the oracles those tests fail, they do not skip.
-
-Not yet validated: images with a non-zero partition offset or a 4096-byte sector, volumes larger
-than the generated 40 MiB, damaged FATs beyond one truncated chain, directory-loop and
-cross-linked-chain damage, and real damaged media. `Volume` is stricter than `fsck.fat` and the
-kernel about the boot signature: both accept an image whose `0x55 0xAA` is zeroed, `Volume::open`
-does not (use `RawVolume` for such a volume). Passing these tests is not a claim of
-production-ready recovery on arbitrary media.
+Not validated: any Windows tool, the macOS FAT implementation, FAT with 1024-, 2048- or
+4096-byte sectors, volumes larger than the 40 MiB fixtures, or damage beyond the recipes in
+`validation/generate.sh`. `fsck.fat` accepts a boot sector whose `0x55 0xAA` signature is
+zero and `Volume::open` refuses it (#8); the tool reports that volume as not valid, like the
+library does. Passing these tests is not a claim of production-ready recovery on arbitrary
+media.
 
 ## Development checks
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+cargo clippy --locked --all-targets --features cli -- -D warnings
+cargo build --locked                    # the library alone, with no CLI dependency
+cargo test --locked --features cli      # the library, the tool's unit tests, tests/cli.rs
+chore test:cli                          # the installed tool: doctor, then tests/cli/test-*.sh
+chore test:oracle                       # the independent oracles, in the Linux test VM
 ```

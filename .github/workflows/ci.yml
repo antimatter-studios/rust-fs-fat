@@ -27,8 +27,15 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Lint the command-line tool
+        run: cargo clippy --locked --all-targets --features cli -- -D warnings
+      # The library alone, with no CLI dependency, then the tool's own tests.
+      - name: Build the library without the cli feature
+        run: cargo build --locked
       - name: Test
         run: cargo test --locked
+      - name: Test the command-line tool
+        run: cargo test --locked --features cli
       - name: Check documentation
         run: cargo doc --locked --no-deps
 
@@ -54,11 +61,12 @@ jobs:
           sudo modprobe vfat || true
           sudo modprobe loop || true
       - name: Lint the oracle tests
-        run: cargo clippy --locked --all-targets --features oracle -- -D warnings
+        run: cargo clippy --locked --all-targets --features cli,oracle -- -D warnings
+      # The driver, then fs.fat as a process, on the same oracle images.
       - name: Test against the oracles
         env:
           FAT_ORACLE_NATIVE: "1"
-        run: cargo test --locked --features oracle --test independent_validation
+        run: cargo test --locked --features cli,oracle --test independent_validation --test cli_independent
       - name: Keep the oracle records
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -70,3 +78,55 @@ jobs:
             target/fat-validation/*.recipe
             target/fat-validation/tools.txt
           if-no-files-found: ignore
+
+  # THE COMMAND-LINE TOOL AS INSTALLED, and the release tarball built from it,
+  # as in rust-fs-ntfs and rust-fs-exfat. `scripts/cli-install.sh` builds the
+  # multi-call binary in release mode and stages it under every name it answers
+  # to; `scripts/test-cli.sh` puts that first on PATH and tests it AS INSTALLED
+  # (`rust-fs-fat doctor` first, then tests/cli/test-*.sh, with a floor on the
+  # checks executed). Then rust-fs-core's package-cli, the script the release
+  # workflow runs, lays out the install prefix Cargo.toml's
+  # [package.metadata.package-cli] declares and refuses it unless it holds
+  # exactly that layout. This repository is checked out beside rust-fs-core
+  # because package-cli runs in place from there, at the tag release.yml pins.
+  cli:
+    name: cli (the installed tool, on PATH, and its tarball)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          path: rust-fs-fat
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: antimatter-studios/rust-fs-core
+          ref: v0.4.5
+          persist-credentials: false
+          path: rust-fs-core
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.95.0
+      - name: Stock runner tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq python3
+      - name: Stage the tool under every name
+        working-directory: rust-fs-fat
+        run: bash scripts/cli-install.sh
+      # FIRST on PATH, ahead of any fs.fat the runner has.
+      - name: Test the staged tool as installed
+        working-directory: rust-fs-fat
+        run: |
+          PATH="$(bash scripts/cli-install.sh --print-bin-dir):$PATH"
+          export PATH
+          bash scripts/test-cli.sh
+      - name: The release tarball has the install layout
+        working-directory: rust-fs-fat
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          mkdir -p tmp/package
+          cd tmp/package
+          tarball="$(bash ../../../rust-fs-core/scripts/package-cli.sh "$version" linux-x86_64 ../../target/release | tail -n 1)"
+          tar -tzvf "$tarball"
