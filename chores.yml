@@ -1,0 +1,27 @@
+version: "3"
+chore_min_version: 0.6.0
+
+# The Linux test VM's tasks, as `chore vm:<task>` (vm:up, vm:run, vm:down ...).
+# Optional: CI has no VM, and a checkout without the sibling still builds.
+includes:
+  vm:
+    taskfile: ../fs-linux-test-harness/vm.chores.yml
+    optional: true
+
+lifecycle:
+  after_all:
+    - '[ ! -x ../fs-linux-test-harness/scripts/vm.sh ] || ../fs-linux-test-harness/scripts/vm.sh reap'
+
+tasks:
+  test:
+    desc: The VM-free unit tests
+    cmds:
+      - cargo test --locked
+
+  test:oracle:
+    desc: "Independent validation: mkfs.fat, fsck.fat, mtools and the kernel's vfat driver check the driver, in the Linux test VM (sibling ../fs-linux-test-harness, v0.7.1)"
+    # `up` boots the shared guest and applies scripts/vm-setup.sh; the session
+    # then detaches when cargo ends, however it ends, leaving the guest up.
+    cmds:
+      - ../fs-linux-test-harness/scripts/vm.sh up
+      - ../fs-linux-test-harness/scripts/vm.sh session cargo test --locked --features oracle --test independent_validation

@@ -137,8 +137,16 @@ fn short_name(raw: &[u8], deleted: bool) -> String {
     if deleted {
         base[0] = b'_';
     }
-    let base = String::from_utf8_lossy(&base).trim_end().to_string();
-    let extension = String::from_utf8_lossy(extension).trim_end().to_string();
+    let mut base = String::from_utf8_lossy(&base).trim_end().to_string();
+    let mut extension = String::from_utf8_lossy(extension).trim_end().to_string();
+    // Byte 12 holds the Windows NT case flags: an 8.3 name stored in upper
+    // case is shown in lower case where the flag for its part is set.
+    if raw[12] & 0x08 != 0 {
+        base.make_ascii_lowercase();
+    }
+    if raw[12] & 0x10 != 0 {
+        extension.make_ascii_lowercase();
+    }
     if extension.is_empty() {
         base
     } else {
@@ -217,5 +225,23 @@ mod tests {
             parse_directory(&bytes, FatKind::Fat16).unwrap()[0].name,
             "FOUND.TXT"
         );
+    }
+
+    #[test]
+    fn nt_case_flags_lower_case_the_short_name_parts_they_cover() {
+        let entry = |flags: u8| {
+            let mut bytes = vec![0; 32];
+            bytes[..11].copy_from_slice(b"README  TXT");
+            bytes[11] = 0x20;
+            bytes[12] = flags;
+            parse_directory(&bytes, FatKind::Fat16)
+                .unwrap()
+                .remove(0)
+                .name
+        };
+        assert_eq!(entry(0x00), "README.TXT");
+        assert_eq!(entry(0x08), "readme.TXT");
+        assert_eq!(entry(0x10), "README.txt");
+        assert_eq!(entry(0x18), "readme.txt");
     }
 }

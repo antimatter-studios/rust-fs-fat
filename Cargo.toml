@@ -12,3 +12,13 @@ name = "fs_fat32"
 
 [dependencies]
 rust-fs-core = "=0.4.3"
+
+[features]
+# Tests that need the independent oracles (mkfs.fat, fsck.fat, mtools and the
+# kernel's vfat driver). They fail, never skip, when the oracles cannot run:
+# `chore test:oracle` provides them in the Linux test VM.
+oracle = []
+
+[[test]]
+name = "independent_validation"
+required-features = ["oracle"]
