@@ -55,14 +55,36 @@ pub struct BootSector {
 }
 
 impl BootSector {
+    /// Reads the BPB of a boot sector and checks that its geometry holds.
+    ///
+    /// The `0x55 0xAA` signature is not required. `fsck.fat` and the Linux
+    /// kernel's vfat driver accept a volume whose BPB is intact and whose
+    /// signature is zero, and a recovery tool has to read such a volume, so
+    /// this does too and reports it: [`BootSector::signature_ok`] is false and
+    /// [`BootSector::warnings`] says so. Without a signature the BPB is the
+    /// only evidence that the sector is a boot sector, so it must also carry a
+    /// media descriptor the kernel and mtools accept (0xF0, or 0xF8 to 0xFF);
+    /// every geometry check applies as it does to a signed sector. A sector
+    /// that fails any of them is refused as "missing boot-sector signature",
+    /// the reason an all-zero sector has always been refused for. A writer
+    /// does not take the lenient reading: it refuses an unsigned volume.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 512 {
             return Err(Error::Invalid("boot sector is shorter than 512 bytes"));
         }
         let signature = [bytes[510], bytes[511]];
         let signature_ok = signature == [0x55, 0xAA];
-        if !signature_ok {
-            return Err(Error::Invalid("missing boot-sector signature"));
+        match Self::parse_bpb(bytes, signature, signature_ok) {
+            Err(_) if !signature_ok => Err(Error::Invalid("missing boot-sector signature")),
+            parsed => parsed,
+        }
+    }
+
+    fn parse_bpb(bytes: &[u8], signature: [u8; 2], signature_ok: bool) -> Result<Self> {
+        if !(signature_ok || bytes[21] == 0xF0 || bytes[21] >= 0xF8) {
+            return Err(Error::Invalid(
+                "unsigned boot sector has no valid media byte",
+            ));
         }
         let bytes_per_sector = u16::from_le_bytes([bytes[11], bytes[12]]);
         let sectors_per_cluster = bytes[13];

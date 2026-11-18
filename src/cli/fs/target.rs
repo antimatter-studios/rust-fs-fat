@@ -150,13 +150,22 @@ impl Target {
             inner: self.slice()?,
             boot,
         };
-        Volume::open(device).map_err(|error| match error {
+        let volume = Volume::open(device).map_err(|error| match error {
             Error::Device(_) => failure(error),
             _ => CliError::refused_by_state(format!(
                 "{error}; `fs.fat IMAGE info` shows the boot sector and any backup copy, and \
                  --boot-sector SECTOR reads another copy instead"
             )),
-        })
+        })?;
+        // A volume the library reads in spite of a defect in its boot sector:
+        // the read goes ahead, and each defect is said once on stderr, which
+        // leaves stdout and the exit status as for any other read.
+        for warning in volume.warnings() {
+            eprintln!(
+                "warning: {warning}; `fs.fat IMAGE info` shows the boot sector and any backup copy"
+            );
+        }
+        Ok(volume)
     }
 }
 

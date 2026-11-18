@@ -120,14 +120,25 @@ impl<Device: BlockDevice> WriteVolume<Device> {
     /// Mounts the volume at the start of `device` for writing.
     ///
     /// The device must be writable. The boot sector and geometry are checked
-    /// as for reading, and a volume that is marked dirty or in error is
-    /// refused with [`Error::Dirty`] rather than written to. Nothing is
-    /// written until the first change.
+    /// as for reading, except that the readers' leniency about a missing
+    /// `0x55 0xAA` signature does not apply: a volume without one is refused
+    /// with [`Error::Invalid`], naming the signature, and must be repaired
+    /// first. A volume that is marked dirty or in error is refused with
+    /// [`Error::Dirty`] rather than written to. Nothing is written until the
+    /// first change.
     pub fn mount(device: Device) -> Result<Self> {
         if !device.is_writable() {
             return Err(Error::Device(fs_core::Error::ReadOnly));
         }
         let volume = Volume::open(device)?;
+        // The readers take a volume without its 0x55 0xAA signature, as
+        // fsck.fat and the kernel do. A writer does not: nothing is changed
+        // on a volume until it has been repaired, and nothing repairs it here.
+        if !volume.boot().signature_ok {
+            return Err(Error::Invalid(
+                "the boot sector's 0x55 0xAA signature is missing; repair the volume (restore bytes 510 and 511 of the boot sector, from the backup copy on FAT32) before writing",
+            ));
+        }
         let boot = volume.boot().clone();
         let mut sector = [0u8; 512];
         volume.read_volume_bytes(0, &mut sector)?;

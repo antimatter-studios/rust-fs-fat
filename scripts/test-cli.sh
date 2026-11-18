@@ -22,7 +22,7 @@
 # STEP 3, THE FLOOR: the passes are summed, and a run that executed fewer
 # checks than CLI_FLOOR fails even when every file passed: a file that quietly
 # stops running its checks reads exactly like one that passes. The floor is
-# about 95% of what the tier executed when it was added.
+# about 95% of what the tier executed when it was last raised (113).
 #
 # CLI_TESTS names another directory of test-*.sh files and CLI_FLOOR another
 # floor, for a test of this script itself.
@@ -30,7 +30,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TESTS="${CLI_TESTS:-$REPO/tests/cli}"
-FLOOR="${CLI_FLOOR:-85}"
+FLOOR="${CLI_FLOOR:-107}"
 CRATE="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "$REPO/Cargo.toml" | head -n 1)"
 INSTALL="build and stage it with \`chore cli:install\` (it prints the PATH line to use), or install it with \`cargo install $CRATE --features cli\`"
 
