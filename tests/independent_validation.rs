@@ -15,7 +15,8 @@ use fs_fat32::directory::{parse_directory, scan_directory, DirectoryEntry};
 use fs_fat32::file::FileAPI;
 use fs_fat32::primitives::{FatValue, PrimitiveAPI};
 use fs_fat32::volume::{open_path, open_raw_device, Volume, VolumeAPI};
-use fs_fat32::FatKind;
+use fs_fat32::write::open_writable_path;
+use fs_fat32::{BootWarning, FatKind};
 mod common;
 
 use common::{assert_unwritten, fixtures, fsck_exit, image, records, snapshot, text};
@@ -348,12 +349,11 @@ fn a_truncated_chain_is_refused_for_that_file_only() {
 #[test]
 fn damaged_boot_metadata_is_refused_by_volume_but_readable_raw() {
     for (base, _) in KINDS {
-        for (recipe, oracle_rejects) in [("nobootsig", false), ("zeroboot", true), ("badbpb", true)]
-        {
+        for (recipe, oracle_rejects) in [("zeroboot", true), ("badbpb", true)] {
             let name = format!("{base}-{recipe}");
             let before = snapshot(&name);
-            // The oracle: fsck.fat accepts a missing signature and refuses
-            // a zero sector size or an empty boot sector.
+            // The oracle: fsck.fat refuses a zero sector size or an empty
+            // boot sector.
             assert_eq!(
                 fsck_exit(&name) != 0,
                 oracle_rejects,
@@ -391,5 +391,119 @@ fn damaged_boot_metadata_is_refused_by_volume_but_readable_raw() {
                 .is_err());
             assert_unwritten(&name, &before);
         }
+    }
+}
+
+/// What the kernel and mtools do with a damaged image, as `generate.sh`
+/// recorded it: `("mounted" | "refused", "listed" | "refused")`.
+fn verdict(name: &str) -> (String, String) {
+    let verdicts = records(name, "verdict");
+    (
+        verdicts["kernel"][0][0].clone(),
+        verdicts["mtools"][0][0].clone(),
+    )
+}
+
+#[test]
+fn a_missing_boot_signature_opens_and_matches_what_fsck_the_kernel_and_mtools_see() {
+    for (base, kind) in KINDS {
+        let name = format!("{base}-nobootsig");
+        let before = snapshot(&name);
+
+        // The oracles: all three accept the volume. fsck.fat reports nothing
+        // about the signature (FAT12/16) or only that the FAT32 copies of the
+        // boot sector differ, and exits 0; the kernel mounts it; mtools lists it.
+        assert_eq!(fsck_exit(&name), 0, "{name}: fsck.fat accepts it");
+        assert_eq!(
+            verdict(&name),
+            ("mounted".into(), "listed".into()),
+            "{name}: the kernel mounts it and mtools lists it"
+        );
+        let fsck = text(&name, "fsck").to_lowercase();
+        assert!(!fsck.contains("signature"), "{name}: {fsck}");
+        // The damage is real: byte 510 and 511 are not the signature.
+        let image_bytes = &before;
+        assert_eq!(&image_bytes[510..512], &[0, 0], "{name}");
+        if kind == FatKind::Fat32 {
+            // The backup boot sector at sector 6 still carries one.
+            assert_eq!(&image_bytes[6 * 512 + 510..6 * 512 + 512], &[0x55, 0xAA]);
+        }
+
+        // The driver opens it, says what is wrong, and reads what they read.
+        let volume = open(&name);
+        assert_eq!(volume.boot().kind, kind, "{name}");
+        assert!(!volume.boot().signature_ok, "{name}");
+        assert_eq!(
+            volume.warnings(),
+            vec![BootWarning::MissingSignature { found: [0, 0] }],
+            "{name}"
+        );
+        let nodes = walk(&volume);
+        assert_eq!(
+            listing(&nodes),
+            expected(&name),
+            "{name}: driver listing differs from the kernel/mtools view"
+        );
+        let tree = fixtures().join(format!("{name}.tree"));
+        for (path, node) in nodes.iter().filter(|(_, n)| !n.directory) {
+            let want = std::fs::read(tree.join(path)).unwrap();
+            let got =
+                read_all(&volume, &node.entry).unwrap_or_else(|e| panic!("{name}: {path}: {e}"));
+            assert!(
+                want == got,
+                "{name}: {path}: content differs from the oracle"
+            );
+        }
+        // The same files as the undamaged volume the kernel built.
+        assert_eq!(listing(&nodes), expected(base), "{name}: same as {base}");
+        let chains = records(&name, "manifest");
+        for fields in &chains["chain"] {
+            let theirs: Vec<u32> = fields[1]
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse().unwrap())
+                .collect();
+            assert_eq!(
+                clusters_of(&volume, &nodes[&fields[0]]),
+                theirs,
+                "{name}: {}: chain differs from mshowfat",
+                fields[0]
+            );
+        }
+        drop(volume);
+
+        // The writable constructor refuses it, and leaves it as it was.
+        assert!(
+            open_writable_path(&image(&name), 0).is_err(),
+            "{name}: refused for writing"
+        );
+        assert_unwritten(&name, &before);
+    }
+}
+
+#[test]
+fn a_missing_signature_does_not_excuse_geometry_the_oracles_refuse_or_the_driver_cannot_hold() {
+    for (base, _) in KINDS {
+        // The kernel and mtools refuse the media byte whatever the signature.
+        let name = format!("{base}-nosigmedia");
+        let before = snapshot(&name);
+        assert_eq!(
+            verdict(&name),
+            ("refused".into(), "refused".into()),
+            "{name}: the oracles refuse a media byte of 0"
+        );
+        assert!(open_path(&image(&name), 0).is_err(), "{name}");
+        assert_unwritten(&name, &before);
+
+        // A FAT too small for its data region: refused by the driver. (The
+        // oracles' verdicts are recorded in the .verdict file, not asserted.)
+        let name = format!("{base}-nosigshortfat");
+        let before = snapshot(&name);
+        let error = open_path(&image(&name), 0).err().expect("refused");
+        assert!(
+            !error.to_string().is_empty() && before[510..512] == [0, 0],
+            "{name}: {error}"
+        );
+        assert_unwritten(&name, &before);
     }
 }

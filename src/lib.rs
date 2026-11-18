@@ -9,7 +9,7 @@ pub mod timestamp;
 pub mod volume;
 pub mod write;
 
-pub use boot::{BootSector, FatKind};
+pub use boot::{BootSector, BootWarning, FatKind};
 pub use volume::{RawVolume, Volume};
 pub use write::{RawWriteVolume, WriteVolume};
 

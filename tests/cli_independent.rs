@@ -227,8 +227,7 @@ fn a_truncated_chain_fails_that_file_only() {
 #[test]
 fn damaged_boot_sectors_are_reported_and_a_fat32_backup_reads_the_volume() {
     for (base, _) in KINDS {
-        for (recipe, oracle_rejects) in [("nobootsig", false), ("zeroboot", true), ("badbpb", true)]
-        {
+        for (recipe, oracle_rejects) in [("zeroboot", true), ("badbpb", true)] {
             let name = format!("{base}-{recipe}");
             let before = snapshot(&name);
             assert_eq!(
@@ -266,6 +265,82 @@ fn damaged_boot_sectors_are_reported_and_a_fat32_backup_reads_the_volume() {
                 // FAT12 and FAT16 keep no backup boot sector.
                 assert!(!info.contains("backup.suggest"), "{name}: {info}");
             }
+            assert_unwritten(&name, &before);
+        }
+    }
+}
+
+#[test]
+fn a_missing_boot_signature_is_read_with_a_warning_like_the_oracles_read_it() {
+    for (base, variant) in KINDS {
+        let name = format!("{base}-nobootsig");
+        let before = snapshot(&name);
+        // fsck.fat accepts the volume.
+        assert_eq!(fsck_exit(&name), 0, "{name}: fsck.fat verdict");
+
+        let info = ok(run_on(&name, &["info", "--text"]));
+        assert_eq!(field(&info, "valid"), "true", "{name}");
+        assert_eq!(field(&info, "volume.variant"), variant, "{name}");
+        assert_eq!(
+            field(&info, "boot_sector.signature_valid"),
+            "false",
+            "{name}"
+        );
+        assert!(field(&info, "warnings").contains("0x55 0xAA"), "{name}");
+        if base == "fat32" {
+            assert_eq!(field(&info, "backup.accepted"), "true", "{name}");
+            assert_eq!(field(&info, "backup.signature_valid"), "true", "{name}");
+        }
+
+        // The listing is the kernel's and mtools', with one warning line.
+        let out = run_on(&name, &["ls", "-R", "/", "--text"]);
+        assert_eq!(out.status.code(), Some(0), "{name}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let warnings: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("warning:"))
+            .collect();
+        assert_eq!(warnings.len(), 1, "{name}: {stderr}");
+        assert!(warnings[0].contains("0x55 0xAA"), "{name}: {stderr}");
+        assert_eq!(
+            listed(&name, &[]),
+            expected(&name),
+            "{name}: listing differs from the kernel/mtools view"
+        );
+
+        let tree = fixtures().join(format!("{name}.tree"));
+        for (path, (directory, _)) in expected(&name) {
+            if directory {
+                continue;
+            }
+            let out = run_on(&name, &["cat", &format!("/{path}")]);
+            assert_eq!(out.status.code(), Some(0), "{name}: {path}");
+            assert!(
+                out.stdout == std::fs::read(tree.join(&path)).unwrap(),
+                "{name}: {path}"
+            );
+        }
+        if base == "fat32" {
+            // Through the signed backup the same volume reads without a warning.
+            let backup = run_on(&name, &["--boot-sector", "6", "ls", "-R", "/", "--text"]);
+            assert_eq!(backup.status.code(), Some(0), "{name}");
+            assert!(!String::from_utf8_lossy(&backup.stderr).contains("warning:"));
+        }
+        assert_unwritten(&name, &before);
+    }
+}
+
+#[test]
+fn a_missing_signature_with_inconsistent_geometry_is_still_refused_with_exit_4() {
+    for (base, _) in KINDS {
+        for recipe in ["nosigshortfat", "nosigmedia"] {
+            let name = format!("{base}-{recipe}");
+            let before = snapshot(&name);
+            let info = ok(run_on(&name, &["info", "--text"]));
+            assert_eq!(field(&info, "valid"), "false", "{name}");
+            let refused = run_on(&name, &["ls", "/"]);
+            assert_eq!(refused.status.code(), Some(4), "{name}");
+            assert!(refused.stdout.is_empty(), "{name}");
             assert_unwritten(&name, &before);
         }
     }
