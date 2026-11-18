@@ -22,11 +22,19 @@
 #   deleted   three root files and one nested file removed through the kernel
 #   truncated the FAT chain of docs/nested/deep.bin cut after its first
 #             cluster, in every FAT copy (patch_fat.py)
-#   nobootsig the 0x55 0xAA boot signature zeroed
+#   nobootsig the 0x55 0xAA boot signature zeroed (FAT32: the backup boot
+#             sector at sector 6 keeps its signature)
 #   zeroboot  sector 0 zeroed
 #   badbpb    bytes-per-sector field set to 0
+#   nosigshortfat the signature zeroed AND the sectors-per-FAT field set to 1,
+#             so the geometry no longer holds
+#   nosigmedia    the signature zeroed AND the media byte set to 0, which the
+#             kernel and mtools refuse whatever the signature says
 # Each has NAME-RECIPE.img, .fsck and .recipe (key<TAB>value lines). The
-# deleted recipe also gets a .manifest and .tree (the kernel cannot read the others).
+# deleted and nobootsig recipes also get a .manifest and .tree (the kernel and
+# mtools cannot read the others). Each nobootsig, nosigshortfat and nosigmedia
+# also gets a .verdict: `kernel<TAB>mounted|refused` (a read-only loop mount)
+# and `mtools<TAB>listed|refused` (mdir).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -142,6 +150,19 @@ fsck_record() { # IMG NAME
 
 publish() { cp --sparse=always "$1" "$out/$2.img"; }
 
+# verdict IMG NAME: whether the kernel's vfat driver mounts the image read-only
+# and mtools lists it, recorded in NAME.verdict. Neither can change the image
+# (a read-only loop mount, and mdir only reads).
+verdict() {
+    local img="$1" name="$2" kernel=refused tools=refused
+    if mount -o ro,loop,iocharset=utf8,shortname=winnt "$img" "$mnt" 2>/dev/null; then
+        kernel=mounted
+        umount "$mnt"
+    fi
+    if mdir -i "$img" -/ ::/ >/dev/null 2>&1; then tools=listed; fi
+    printf 'kernel\t%s\nmtools\t%s\n' "$kernel" "$tools" >"$out/$name.verdict"
+}
+
 # chain_of IMG PATH: the clusters mtools' mshowfat reports, one per line.
 chain_of() {
     mshowfat -i "$1" "::/$2" | grep -o '<[^>]*>' | tr -d '<>' | tr ',' '\n' |
@@ -191,11 +212,28 @@ damage() { # NAME KIND RECIPE
         printf '\0\0' | dd of="$img" bs=1 seek=11 conv=notrunc status=none
         printf 'boot\tbytes per sector set to 0\n' >>"$out/$tag.recipe"
         ;;
+    nosigshortfat)
+        printf '\0\0' | dd of="$img" bs=1 seek=510 conv=notrunc status=none
+        if [ "$kind" = 32 ]; then
+            printf '\1\0\0\0' | dd of="$img" bs=1 seek=36 conv=notrunc status=none
+        else
+            printf '\1\0' | dd of="$img" bs=1 seek=22 conv=notrunc status=none
+        fi
+        printf 'boot\tsignature zeroed, sectors per FAT set to 1\n' >>"$out/$tag.recipe"
+        ;;
+    nosigmedia)
+        printf '\0\0' | dd of="$img" bs=1 seek=510 conv=notrunc status=none
+        printf '\0' | dd of="$img" bs=1 seek=21 conv=notrunc status=none
+        printf 'boot\tsignature zeroed, media byte set to 0\n' >>"$out/$tag.recipe"
+        ;;
     esac
     publish "$img" "$tag"
     fsck_record "$img" "$tag"
     case "$recipe" in
-    deleted) oracle "$img" "$tag" ;;
+    deleted | nobootsig) oracle "$img" "$tag" ;;
+    esac
+    case "$recipe" in
+    nobootsig | nosigshortfat | nosigmedia) verdict "$img" "$tag" ;;
     esac
 }
 
@@ -206,7 +244,7 @@ build fat32 32 "-s 1 -S 512" 40960 512 70
 for spec in "fat12 12" "fat16 16" "fat32 32"; do
     # shellcheck disable=SC2086
     set -- $spec
-    for recipe in deleted truncated nobootsig zeroboot badbpb; do
+    for recipe in deleted truncated nobootsig zeroboot badbpb nosigshortfat nosigmedia; do
         damage "$1" "$2" "$recipe"
     done
 done

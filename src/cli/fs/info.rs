@@ -3,7 +3,10 @@
 //! This goes through `RawVolume`, which needs no valid boot sector, so it
 //! answers for a damaged one: it reports every field as the bytes say it,
 //! whether the library's checked layer accepts them and, if not, why, and
-//! where a backup copy is and whether that one holds up.
+//! where a backup copy is and whether that one holds up. A boot sector the
+//! library reads in spite of a defect, a missing `0x55 0xAA` signature, is
+//! `valid` and lists the defect under `warnings`; `boot_sector.signature_valid`
+//! and the backup's `signature_valid` say which copies are signed.
 
 use super::target::{failure, Target};
 use super::{hex, Verb};
@@ -30,7 +33,9 @@ fn command() -> Command {
             "Reads the boot sector as raw bytes. `valid` says whether the library accepts it; when it \
              does not, `problem` says why. For a FAT32 layout, or a sector 0 that cannot be read as \
              any layout, the backup copy is checked too, and `suggest` gives the --boot-sector \
-             argument that makes the other verbs use it.",
+             argument that makes the other verbs use it. A boot sector whose `0x55 0xAA` signature is \
+             missing but whose BPB holds up is `valid`, with the defect under `warnings`; the other \
+             verbs read it too and print the warning on stderr.",
         )
 }
 
@@ -205,6 +210,10 @@ fn run(target: &Target, _: &ArgMatches) -> Result<Outcome, CliError> {
                 let (copy_boot, copy_problem) = verdict(&copy, image_bytes);
                 let accepted = copy_problem.is_none();
                 report.push(("accepted", Json::from(accepted)));
+                report.push((
+                    "signature_valid",
+                    Json::from(copy[510..512] == [0x55, 0xAA]),
+                ));
                 report.push(("problem", Json::from(copy_problem)));
                 report.push(("identical_to_selected", Json::from(copy == sector)));
                 if let Some(copy_boot) = &copy_boot {
@@ -227,6 +236,17 @@ fn run(target: &Target, _: &ArgMatches) -> Result<Outcome, CliError> {
         ("boot_sector_read_from", Json::from(selected)),
         ("valid", Json::from(valid)),
         ("problem", Json::from(problem)),
+        // What the library tolerates in this boot sector and says so: the
+        // volume is valid and is read as it is.
+        (
+            "warnings",
+            Json::Arr(
+                boot.iter()
+                    .flat_map(|boot| boot.warnings())
+                    .map(|warning| Json::from(warning.to_string()))
+                    .collect(),
+            ),
+        ),
         (
             "volume",
             match &boot {

@@ -575,7 +575,8 @@ pub fn format(device: &dyn BlockDevice, options: &FormatOptions) -> Result<Layou
     // The reader's own rules must agree with what is about to be written.
     let boot = boot_sector(&layout);
     let parsed = BootSector::parse(&boot)?;
-    if parsed.kind != layout.kind
+    if !parsed.signature_ok
+        || parsed.kind != layout.kind
         || parsed.cluster_count != layout.cluster_count
         || parsed.first_data_sector != layout.first_data_sector
     {

@@ -1,4 +1,4 @@
-use crate::boot::BootSector;
+use crate::boot::{BootSector, BootWarning};
 use crate::{Error, Result};
 use fs_core::{BlockRead, FileDevice, OwnedSlice, ReadOnlyDevice};
 use std::path::Path;
@@ -55,6 +55,12 @@ impl<Device: BlockRead> Volume<Device> {
 
     pub fn boot(&self) -> &BootSector {
         &self.boot
+    }
+
+    /// What is wrong with the boot sector that the reader tolerated to open
+    /// this volume. Empty for a volume with nothing to report.
+    pub fn warnings(&self) -> Vec<BootWarning> {
+        self.boot.warnings()
     }
 
     pub fn device(&self) -> &Device {

@@ -404,3 +404,100 @@ fn nothing_writes_the_image_not_even_a_read_only_one() {
         );
     }
 }
+
+/// The `warning:` lines a run printed on stderr.
+fn warnings_of(output: &std::process::Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter(|line| line.starts_with("warning:"))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn a_missing_boot_signature_is_read_with_a_warning_and_info_reports_it() {
+    let dir = scratch("nosig");
+    for (name, variant) in [("fat12", "FAT12"), ("fat32", "FAT32")] {
+        let image = sample(name, &dir);
+        let signed = std::fs::read(&image).unwrap();
+        let listing = fs(&image, &["ls", "-R", "/", "--text"]);
+        let readme = fs(&image, &["cat", "/README.TXT"]);
+        assert!(warnings_of(&listing).is_empty(), "{name}: a signed volume");
+
+        let mut bytes = signed.clone();
+        bytes[510..512].fill(0);
+        std::fs::write(&image, &bytes).unwrap();
+
+        let info = ok(fs(&image, &["info", "--text"]));
+        assert!(info.contains("valid: true"), "{name}: {info}");
+        assert!(
+            info.contains(&format!("volume.variant: {variant}")),
+            "{info}"
+        );
+        assert!(
+            info.contains("boot_sector.signature_valid: false"),
+            "{name}: {info}"
+        );
+        assert!(info.contains("0x55 0xAA"), "{name}: the warning: {info}");
+        if name == "fat32" {
+            assert!(info.contains("backup.accepted: true"), "{info}");
+            assert!(info.contains("backup.signature_valid: true"), "{info}");
+        } else {
+            assert!(!info.contains("backup.signature_valid"), "{info}");
+        }
+        let json = ok(fs(&image, &["info"]));
+        assert!(json.contains("\"warnings\""), "{json}");
+
+        // Every read verb works, with one warning line on stderr and the
+        // same stdout as for the signed volume.
+        for (args, want) in [
+            (vec!["ls", "-R", "/", "--text"], Some(&listing.stdout)),
+            (vec!["cat", "/README.TXT"], Some(&readme.stdout)),
+            (vec!["stat", "/docs", "--text"], None),
+            (vec!["scan", "-R", "/", "--text"], None),
+            (vec!["chain", "4", "--text"], None),
+            (vec!["fat", "2", "--count", "4", "--text"], None),
+        ] {
+            let out = fs(&image, &args);
+            assert_eq!(out.status.code(), Some(0), "{name}: {args:?}");
+            let warnings = warnings_of(&out);
+            assert_eq!(warnings.len(), 1, "{name}: {args:?}: {warnings:?}");
+            assert!(warnings[0].contains("0x55 0xAA"), "{}", warnings[0]);
+            if let Some(want) = want {
+                assert_eq!(&out.stdout, want, "{name}: {args:?}");
+            }
+        }
+        let export = dir.join(format!("{name}.out"));
+        let exported = fs(&image, &["export", "/README.TXT", export.to_str().unwrap()]);
+        assert_eq!(exported.status.code(), Some(0), "{name}");
+        assert_eq!(warnings_of(&exported).len(), 1, "{name}");
+        assert_eq!(std::fs::read(&export).unwrap(), content("README.TXT"));
+
+        if name == "fat32" {
+            // The backup boot sector is signed: reading through it is clean.
+            let through = fs(&image, &["--boot-sector", "6", "cat", "/README.TXT"]);
+            assert_eq!(through.status.code(), Some(0));
+            assert!(warnings_of(&through).is_empty(), "{:?}", through.stderr);
+            assert_eq!(through.stdout, readme.stdout);
+        }
+        assert_eq!(std::fs::read(&image).unwrap(), bytes, "{name}: written");
+    }
+}
+
+#[test]
+fn a_missing_signature_does_not_excuse_a_boot_sector_that_is_not_one() {
+    let dir = scratch("nosig-refused");
+    let image = sample("fat12", &dir);
+    let mut bytes = std::fs::read(&image).unwrap();
+    bytes[510..512].fill(0);
+    bytes[11..13].fill(0);
+    std::fs::write(&image, &bytes).unwrap();
+
+    let info = ok(fs(&image, &["info", "--text"]));
+    assert!(info.contains("valid: false"), "{info}");
+    let refused = fs(&image, &["ls", "/"]);
+    assert_eq!(refused.status.code(), Some(4));
+    assert!(refused.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("signature"));
+    assert_eq!(std::fs::read(&image).unwrap(), bytes);
+}

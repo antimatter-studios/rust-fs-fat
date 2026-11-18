@@ -22,7 +22,30 @@ handled behind shared APIs.
 - `write::WriteVolume` is the only way to change a volume (see below).
 
 `BootSector::parse` classifies the FAT variant using the standard data-cluster
-thresholds. `FatKind` remains available to callers that need to report or
+thresholds.
+
+### A missing `0x55 0xAA` boot signature
+
+Readers are lenient about it and writers are strict. `fsck.fat` (dosfstools 4.2) and the Linux
+kernel's vfat driver (6.1) accept a volume whose BPB is intact and whose bytes 510 and 511 are
+zero: `fsck.fat -n` exits 0 and says nothing about the signature (on FAT32 it only notes that the
+boot sector differs from its backup), the kernel mounts the volume read-only and read-write, and
+mtools lists it. So `Volume::open`, `open_device`, `open_path` and the `FileAPI` and `PrimitiveAPI`
+on them accept such a volume. They report the defect instead of hiding it: `BootSector::signature`
+and `signature_ok`, and `Volume::warnings()` (or `BootSector::warnings()`), which return a list of
+`BootWarning` (`MissingSignature { found }`). Nothing is repaired and nothing is written.
+
+The BPB is then the only evidence that the sector is a boot sector, so every geometry check still
+applies, and an unsigned sector must also carry a media byte of 0xF0 or 0xF8 to 0xFF, which the
+kernel and mtools require too (both refuse a media byte of 0 whatever the signature). A sector
+that fails any check, an all-zero sector included, is refused as before, with `missing boot-sector
+signature`. `RawVolume` needs no boot sector and is unchanged.
+
+Writing is strict: `WriteVolume::mount`, `open_writable` and `open_writable_path` refuse an
+unsigned volume with `Error::Invalid` naming the signature and how to repair it (restore bytes 510
+and 511, from the backup boot sector on FAT32), and `mkfs::format` writes the signature in every
+boot sector it writes (sector 0, the FAT32 backup at sector 6, and the end of a sector larger than
+512 bytes). There is no silent repair; `RawWriteVolume` can write the two bytes. `FatKind` remains available to callers that need to report or
 specialize on the on-disk format.
 
 ## Write capability
@@ -151,7 +174,11 @@ fs.fat damaged.img --boot-sector 6 ls /   # read the volume through the FAT32 ba
 Every verb opens the image read-only (a `FileDevice` wrapped again in `ReadOnlyDevice`)
 and never writes to it. `info` goes through `RawVolume` and needs no valid boot sector, so
 it answers for a damaged one; every other verb goes through the checked `Volume`, and
-refuses a volume whose boot sector does not hold up with exit 4, naming `--boot-sector`. `--boot-sector SECTOR` substitutes the boot sector found at that
+refuses a volume whose boot sector does not hold up with exit 4, naming `--boot-sector`.
+A volume whose only defect is a missing `0x55 0xAA` signature is read: `info` says `valid: true`
+with the defect under `warnings`, `boot_sector.signature_valid: false` and, for FAT32,
+`backup.signature_valid`; every other verb prints one `warning:` line on stderr and exits 0 with
+the same stdout as for a signed volume. `--boot-sector SECTOR` substitutes the boot sector found at that
 512-byte sector for sector 0, which is how a FAT32 volume with a destroyed sector 0 is
 read through its backup copy at sector 6. FAT12 and FAT16 keep no backup boot sector.
 The library lists only the root directory, so subdirectories and paths are resolved in
@@ -198,8 +225,8 @@ unicode-ident adds Unicode-3.0). None is copyleft.
 The driver passes its synthetic FAT12/16/32 tests, and
 `tests/independent_validation.rs` checks it against `mkfs.fat`, `fsck.fat`, mtools and
 the Linux kernel's vfat driver on images those tools built (clean, with deleted files, a
-truncated chain, and three kinds of damaged boot sector): listings, file bytes, cluster
-chains including fragmented files, and that nothing is written. `tests/cli_independent.rs`
+truncated chain, and damaged boot sectors, among them a zeroed signature): listings, file bytes,
+cluster chains including fragmented files, and that nothing is written. `tests/cli_independent.rs`
 runs the command-line tool as a process on the same images and compares it with the same
 oracles; `tests/cli.rs` and `tests/cli/` run it on two small volumes formatted by
 `mkfs.fat` and filled by mtools (`validation/make-cli-samples.sh`). The oracle tests run in
@@ -208,9 +235,13 @@ the Linux test VM (`chore test:oracle`) and in CI's `oracle` job. The formatter 
 
 Not validated for reading: any Windows tool (Windows' view of written volumes is in Writing below), the macOS FAT implementation, FAT with 1024-, 2048- or
 4096-byte sectors, volumes larger than the 40 MiB fixtures, or damage beyond the recipes in
-`validation/generate.sh`. `fsck.fat` accepts a boot sector whose `0x55 0xAA` signature is
-zero and `Volume::open` refuses it (#8); the tool reports that volume as not valid, like the
-library does. Passing these tests is not a claim of production-ready recovery on arbitrary
+`validation/generate.sh`. A zeroed `0x55 0xAA` signature (#8) is validated for FAT12, FAT16 and
+FAT32: `fsck.fat -n` exits 0, the kernel mounts the image and mtools lists it
+(`<image>.verdict`), and the driver and `fs.fat` list the same paths and read the same bytes and
+cluster chains as the kernel and mtools, with a warning and without writing. The same zeroed
+signature with a media byte of 0 is refused by the kernel, by mtools and by the driver; with a
+sectors-per-FAT field of 1 the driver refuses it where the kernel still mounts it (the driver
+checks that the FAT can hold the data region). Passing these tests is not a claim of production-ready recovery on arbitrary
 media.
 
 ### Writing
