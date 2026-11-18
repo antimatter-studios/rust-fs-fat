@@ -61,7 +61,7 @@ jobs:
           sudo modprobe vfat || true
           sudo modprobe loop || true
       - name: Lint the oracle tests
-        run: cargo clippy --locked --all-targets --features cli,oracle -- -D warnings
+        run: cargo clippy --locked --all-targets --features cli,oracle,windows-oracle -- -D warnings
       # The driver, then fs.fat as a process, on the same oracle images.
       - name: Test against the oracles
         env:
@@ -79,6 +79,8 @@ jobs:
             target/fat-validation/tools.txt
             target/fat-format/*.check
             target/fat-format/tools.txt
+            target/fat-write/*.inspect
+            target/fat-write/tools.txt
           if-no-files-found: ignore
 
   # THE COMMAND-LINE TOOL AS INSTALLED, and the release tarball built from it,
