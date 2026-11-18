@@ -126,12 +126,12 @@ fn plausible_short_name(raw: &[u8]) -> bool {
         })
 }
 
-fn short_checksum(name: &[u8]) -> u8 {
+pub(crate) fn short_checksum(name: &[u8]) -> u8 {
     name.iter()
         .fold(0u8, |sum, byte| sum.rotate_right(1).wrapping_add(*byte))
 }
 
-fn short_name(raw: &[u8], deleted: bool) -> String {
+pub(crate) fn short_name(raw: &[u8], deleted: bool) -> String {
     let mut base = raw[..8].to_vec();
     let extension = &raw[8..11];
     if deleted {

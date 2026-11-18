@@ -53,6 +53,47 @@ at the same time corrupts it, and it cannot tell. The caller keeps exclusive acc
 build or repair a volume byte by byte. It is not a mount: nothing is validated or flagged, and it
 writes any bytes anywhere in its range.
 
+## File operations
+
+A `WriteVolume` creates, writes, truncates, renames and removes files and directories on FAT12,
+FAT16 and FAT32, by path (`/` separated, names compared without regard to case): `create_file`,
+`mkdir`, `write`, `truncate`, `rename`, `unlink`, `rmdir`, and `read_dir`, `stat`, `open`, `read` and
+`len` to look at the result. Reads see every change as it is made. `FileHandle` ties a file to the
+volume that opened it and to the directory entry it was opened on: another volume's handle is
+refused (`ForeignHandle`), and once the file is removed, replaced or renamed the handle is refused
+too (`StaleHandle`), so it cannot reach whatever is later stored in that slot or in a recycled
+directory cluster.
+
+- Names: a name that is already 8.3 in one case is a single short entry with the Windows NT
+  lower-case flags. Any other name is long-name entries (with checksum and ordinals) over a short alias
+  that gets a `~N` tail when making it lost something or the plain alias is taken (`Readme.md` is
+  `README.MD` with no tail; `The quick brown fox.txt` is `THEQUI~1.TXT`). Characters that cannot be
+  stored in a short name become `_`. Names up to 255 UTF-16 units are accepted; `.`/`..` parts, a
+  trailing dot or space, control characters and `\ / : * ? " < > |` are refused with
+  `InvalidName`.
+- Space: each operation checks it has the clusters it needs before it writes, so a full volume
+  (`VolumeFull`) or a full fixed FAT12/FAT16 root (`RootDirectoryFull`) is refused with nothing
+  changed. Subdirectories and the FAT32 root grow by clusters, up to 65536 entries (`DirectoryFull`).
+- Consistency: every FAT copy is written (FAT12's packed 12-bit entries are patched across sector
+  boundaries), the FAT32 FSInfo free count and next-free hint are kept current, and each operation
+  writes in an order that leaves the volume consistent if it stops (growing: FAT, data, then the
+  entry; shrinking and removing: the entry, then the FAT). New and grown space reads as zeros, never
+  what an earlier file left there.
+- Timestamps come from `set_clock` (default the system clock, read as UTC; FAT keeps no zone).
+  A file's size is at most 4 GiB less one byte (`FileTooLarge`).
+- Not done: file attributes cannot be set, read-only files are not protected, short-name hashing
+  after many collisions (a `~N` counter is used), and a device whose logical block is larger than the
+  volume's sectors is not supported.
+
+`tests/write_ops.rs` runs these on all three variants against `tests/support/check.rs`, a parser
+written for the tests that does not use the driver: it checks the BPB, that every FAT copy agrees,
+every chain (no cross-links, no lost clusters, length against size), every directory (long-name
+checksums and order, unique names, `.`/`..`, the end marker), the FSInfo count and the clean flags,
+and returns the tree and contents to compare with a model. A 400-step random sequence is checked
+against the model on each variant. That is a check against an independent reading written by the same
+author, not against another implementation: `fsck.fat`, the Linux kernel, mtools and Windows have not
+yet been run over volumes this driver wrote (issue #5).
+
 ## Formatting
 
 `mkfs::format` (and `format_path`, for an image file it creates or grows) writes an empty FAT12,

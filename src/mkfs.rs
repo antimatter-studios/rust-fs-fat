@@ -1,7 +1,7 @@
 //! Formatting FAT12, FAT16 and FAT32 volumes.
 //!
 //! [`plan`] turns a volume size and [`FormatOptions`] into a [`Layout`]: which
-//! variant, how many sectors per cluster, how big the FATs are. [`format`]
+//! variant, how many sectors per cluster, how big the FATs are. [`format()`]
 //! writes that layout to a [`fs_core::BlockDevice`] (at an offset within it if
 //! asked), and [`format_path`] does the same into an image file, creating or
 //! growing it.

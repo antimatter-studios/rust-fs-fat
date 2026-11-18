@@ -47,13 +47,25 @@
 
 use crate::boot::FatKind;
 use crate::primitives::PrimitiveAPI;
+use crate::timestamp::FatTimestamp;
 use crate::volume::{Volume, VolumeAPI};
 use crate::{Error, Result};
 use fs_core::{BlockDevice, FileDevice, OwnedRwSlice};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+mod alloc;
+mod dir;
+mod names;
+mod ops;
+
+pub use ops::{EntryInfo, FileHandle};
+
+/// Gives each mount an identity its handles carry.
+static NEXT_VOLUME: AtomicU64 = AtomicU64::new(1);
 
 /// Boot-sector state byte: the volume was not shut down cleanly.
 const STATE_DIRTY: u8 = 0x01;
@@ -80,6 +92,20 @@ pub struct WriteVolume<Device: BlockDevice> {
     /// The FAT copies a write keeps in step: all of them, or only the active
     /// one when a FAT32 volume has mirroring turned off.
     fat_copies: Vec<u8>,
+    /// This mount's identity, carried by its handles.
+    id: u64,
+    /// Free clusters, counted at mount and kept current.
+    free: u32,
+    /// Where the next allocation starts looking.
+    next_free: u32,
+    /// The FAT32 FSInfo sector, when the volume has a valid one.
+    fsinfo: Option<alloc::FsInfo>,
+    /// The identity of each directory entry a handle was made for, by
+    /// (directory, slot). An entry that is removed or replaced loses its
+    /// identity, which is what makes handles to it stale.
+    slots: HashMap<(u32, u32), u64>,
+    next_identity: u64,
+    clock: fn() -> FatTimestamp,
 }
 
 impl<Device: BlockDevice> Deref for WriteVolume<Device> {
@@ -136,13 +162,33 @@ impl<Device: BlockDevice> WriteVolume<Device> {
                 ));
             }
         }
-        Ok(Self {
+        let fsinfo = if boot.kind == FatKind::Fat32 {
+            fsinfo_state(&volume, &sector, u64::from(boot.bytes_per_sector))?
+        } else {
+            None
+        };
+        let mut mount = Self {
             volume,
             state: State::Mounted,
             marked_dirty: false,
             writes: 0,
             fat_copies,
-        })
+            id: NEXT_VOLUME.fetch_add(1, Ordering::Relaxed),
+            free: 0,
+            next_free: 2,
+            fsinfo,
+            slots: HashMap::new(),
+            next_identity: 0,
+            clock: FatTimestamp::now,
+        };
+        mount.free = mount.scan_free()?;
+        if let Some(info) = &mount.fsinfo {
+            let hint = info.written_next;
+            if (2..boot.cluster_count + 2).contains(&hint) {
+                mount.next_free = hint;
+            }
+        }
+        Ok(mount)
     }
 
     /// Asks the device to put every write made so far on stable storage.
@@ -182,7 +228,19 @@ impl<Device: BlockDevice> WriteVolume<Device> {
         if cluster >= self.volume.boot().cluster_count + 2 {
             return Err(Error::Bounds);
         }
-        self.mutate(|volume| volume.write_fat_entries(&[(cluster, value)]))
+        self.mutate(|volume| {
+            let old = volume.fat_entries(cluster, 1)?[0];
+            volume.write_fat_entries(&[(cluster, value)])?;
+            if cluster >= 2 {
+                if old == 0 && value != 0 {
+                    volume.free = volume.free.saturating_sub(1);
+                } else if old != 0 && value == 0 {
+                    volume.free += 1;
+                }
+                volume.write_fsinfo()?;
+            }
+            Ok(())
+        })
     }
 
     /// Writes `data` at `offset` within a data cluster.
@@ -403,6 +461,30 @@ impl<Device: BlockDevice> Drop for WriteVolume<Device> {
         }
         let _ = self.finish();
     }
+}
+
+/// The FSInfo sector, if the volume has one whose signatures are right, with
+/// the hint it holds. A damaged or missing FSInfo is left alone.
+fn fsinfo_state<Device: BlockDevice>(
+    volume: &Volume<Device>,
+    boot: &[u8; 512],
+    sector: u64,
+) -> Result<Option<alloc::FsInfo>> {
+    let number = u64::from(u16::from_le_bytes([boot[48], boot[49]]));
+    if number == 0 || number >= u64::from(volume.boot().reserved_sectors) {
+        return Ok(None);
+    }
+    let mut info = [0u8; 512];
+    volume.read_volume_bytes(number * sector, &mut info)?;
+    let word = |at: usize| u32::from_le_bytes([info[at], info[at + 1], info[at + 2], info[at + 3]]);
+    if word(0) != 0x4161_5252 || word(484) != 0x6141_7272 || word(508) != 0xAA55_0000 {
+        return Ok(None);
+    }
+    Ok(Some(alloc::FsInfo {
+        offset: number * sector,
+        written_free: word(488),
+        written_next: word(492),
+    }))
 }
 
 /// The offset of the boot sector's state byte, for the variants that have one.
