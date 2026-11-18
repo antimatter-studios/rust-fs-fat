@@ -66,7 +66,7 @@ jobs:
       - name: Test against the oracles
         env:
           FAT_ORACLE_NATIVE: "1"
-        run: cargo test --locked --features cli,oracle --test independent_validation --test cli_independent
+        run: cargo test --locked --features cli,oracle
       - name: Keep the oracle records
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -77,6 +77,8 @@ jobs:
             target/fat-validation/*.manifest
             target/fat-validation/*.recipe
             target/fat-validation/tools.txt
+            target/fat-format/*.check
+            target/fat-format/tools.txt
           if-no-files-found: ignore
 
   # THE COMMAND-LINE TOOL AS INSTALLED, and the release tarball built from it,
