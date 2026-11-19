@@ -133,12 +133,14 @@ pub(crate) fn short_checksum(name: &[u8]) -> u8 {
 
 pub(crate) fn short_name(raw: &[u8], deleted: bool) -> String {
     let mut base = raw[..8].to_vec();
-    let extension = &raw[8..11];
     if deleted {
         base[0] = b'_';
+    } else if base[0] == 0x05 {
+        // 0x05 stands for 0xE5, which would otherwise mark the entry deleted.
+        base[0] = 0xE5;
     }
-    let mut base = String::from_utf8_lossy(&base).trim_end().to_string();
-    let mut extension = String::from_utf8_lossy(extension).trim_end().to_string();
+    let mut base = oem_text(&base);
+    let mut extension = oem_text(&raw[8..11]);
     // Byte 12 holds the Windows NT case flags: an 8.3 name stored in upper
     // case is shown in lower case where the flag for its part is set.
     if raw[12] & 0x08 != 0 {
@@ -151,6 +153,38 @@ pub(crate) fn short_name(raw: &[u8], deleted: bool) -> String {
         base
     } else {
         format!("{base}.{extension}")
+    }
+}
+
+/// Decodes the bytes of an 8.3 name part, dropping its trailing padding.
+///
+/// A short name is stored in the volume's OEM code page, not in UTF-8; code
+/// page 437 is the default of Windows and of the Linux `codepage=437` mount
+/// option. Padding is cut by byte, because code page 437 maps 0xFF to a
+/// no-break space that a text trim would also remove.
+fn oem_text(bytes: &[u8]) -> String {
+    let end = bytes
+        .iter()
+        .rposition(|byte| *byte != b' ')
+        .map_or(0, |last| last + 1);
+    bytes[..end].iter().map(|byte| cp437(*byte)).collect()
+}
+
+/// Code page 437 for the bytes 0x80..=0xFF; the bytes below are ASCII.
+const CP437_HIGH: [char; 128] = [
+    'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', 'É', 'æ', 'Æ',
+    'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', 'á', 'í', 'ó', 'ú', 'ñ', 'Ñ',
+    'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', '░', '▒', '▓', '│', '┤', '╡', '╢', '╖', '╕',
+    '╣', '║', '╗', '╝', '╜', '╛', '┐', '└', '┴', '┬', '├', '─', '┼', '╞', '╟', '╚', '╔', '╩', '╦',
+    '╠', '═', '╬', '╧', '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘', '┌', '█', '▄', '▌', '▐',
+    '▀', 'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ', '∞', 'φ', 'ε', '∩', '≡', '±',
+    '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■', '\u{a0}',
+];
+
+fn cp437(byte: u8) -> char {
+    match byte {
+        0x80..=0xFF => CP437_HIGH[usize::from(byte - 0x80)],
+        _ => char::from(byte),
     }
 }
 
@@ -243,5 +277,40 @@ mod tests {
         assert_eq!(entry(0x08), "readme.TXT");
         assert_eq!(entry(0x10), "README.txt");
         assert_eq!(entry(0x18), "readme.txt");
+    }
+
+    #[test]
+    fn short_name_bytes_above_0x7f_are_read_in_code_page_437() {
+        let name = |short: &[u8; 11], flags: u8, deleted: bool| {
+            let mut bytes = vec![0; 32];
+            bytes[..11].copy_from_slice(short);
+            bytes[11] = 0x20;
+            bytes[12] = flags;
+            if deleted {
+                bytes[0] = 0xE5;
+            }
+            let found = if deleted {
+                scan_directory(&bytes, FatKind::Fat16)
+                    .unwrap()
+                    .remove(0)
+                    .entry
+            } else {
+                parse_directory(&bytes, FatKind::Fat16).unwrap().remove(0)
+            };
+            found.name
+        };
+        assert_eq!(name(b"\x81\x82\x84\x94\xE1   TXT", 0, false), "üéäöß.TXT");
+        assert_eq!(name(b"\x9AN\x8BCD~1 TXT", 0, false), "ÜNïCD~1.TXT");
+        // 0x05 stands for 0xE5 in the first byte of a live name.
+        assert_eq!(name(b"\x05BC     \x84\x94 ", 0, false), "σBC.äö");
+        // The NT lower-case flags change ASCII letters only.
+        assert_eq!(name(b"\x9AN\x8BCD   \x84XT", 0x18, false), "Ünïcd.äxt");
+        // A deleted entry loses its first byte, and the rest still decodes.
+        assert_eq!(name(b"\xE5\x82T\x94    TXT", 0, true), "_éTö.TXT");
+        // The control and block characters of the table.
+        assert_eq!(
+            name(b"\x80\xB0\xDB\xFE\xFF   TXT", 0, false),
+            "Ç░█■\u{a0}.TXT"
+        );
     }
 }
