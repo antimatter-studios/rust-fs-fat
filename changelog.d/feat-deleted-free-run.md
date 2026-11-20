@@ -1,0 +1,2 @@
+### Added
+- The walk of a deleted file's entry now guesses its clusters as the next free clusters from its first cluster onward, skipping clusters live files use, so a file written around a live one is recovered byte for byte. The walk is partial (`WalkEnd::OutOfRange`) when the free clusters run out at the end of the volume. `FatAdapter::with_deleted_guess(DeletedGuess::Contiguous)` keeps the plain run from the first cluster for comparison. Known limit: a free cluster that another, also deleted, file used since is taken as this file's.

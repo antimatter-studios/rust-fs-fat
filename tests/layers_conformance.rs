@@ -755,3 +755,169 @@ fn a_lone_entry_in_an_orphaned_cluster_is_found_as_the_weakest_candidate() {
             .all(|c| !c.detail.lone_entry));
     }
 }
+
+// ---------------------------------------------------- deleted-file cluster guess
+
+use fs_fat32::layers::DeletedGuess;
+
+/// What the deleted entry `name` rebuilds as under `guess`, and how its walk
+/// ended.
+fn rebuilt(
+    image: &[u8],
+    name: &str,
+    guess: DeletedGuess,
+) -> (
+    Vec<u8>,
+    fs_core::layers::WalkEnd,
+    fs_core::layers::ExtentWalk,
+) {
+    let source = Owned(image.to_vec());
+    let adapter = FatAdapter::from_source(&source)
+        .unwrap()
+        .with_deleted_guess(guess);
+    let mut found = Vec::new();
+    adapter
+        .find_candidates(&source, Extent::new(0, source.size_bytes()), &mut found)
+        .unwrap();
+    let candidate = found
+        .iter()
+        .find(|c| {
+            c.state == CandidateState::Deleted
+                && c.name
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+        .unwrap_or_else(|| panic!("no deleted {name}"));
+    let walk = adapter.walk_extents(&source, candidate).unwrap();
+    let mut bytes = Vec::new();
+    adapter
+        .materialize(&source, &walk.plan(), &mut bytes)
+        .unwrap();
+    (bytes, walk.end, walk)
+}
+
+/// A volume with `/D.BIN` of three clusters deleted, written around a live
+/// `/LIVE.BIN` that sits between its first cluster and the rest.
+fn written_around(kind: FatKind, size: u64) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let disk = Disk::new(vec![0; size as usize]);
+    format(
+        &disk,
+        &FormatOptions {
+            kind: Some(kind),
+            ..FormatOptions::default()
+        },
+    )
+    .unwrap();
+    let cluster = u64::from(
+        fs_fat32::BootSector::parse(&disk.bytes()[..512])
+            .unwrap()
+            .cluster_size() as u32,
+    ) as usize;
+    let wanted = pattern(3 * cluster - 7, 9);
+    let live = pattern(cluster, 10);
+    let mut volume = WriteVolume::mount(disk.clone()).unwrap();
+    let d = volume.create_file("/D.BIN").unwrap();
+    volume.write(&d, 0, &wanted[..cluster]).unwrap();
+    let l = volume.create_file("/LIVE.BIN").unwrap();
+    volume.write(&l, 0, &live).unwrap();
+    volume
+        .write(&d, cluster as u64, &wanted[cluster..])
+        .unwrap();
+    volume.unlink("/D.BIN").unwrap();
+    volume.unmount().unwrap();
+    (disk.bytes(), wanted, live)
+}
+
+#[test]
+fn a_deleted_file_written_around_a_live_one_is_recovered_by_the_free_cluster_guess() {
+    for (kind, size) in SIZES {
+        let (image, wanted, live) = written_around(kind, size);
+        let (bytes, end, walk) = rebuilt(&image, "_.BIN", DeletedGuess::FreeClusters);
+        assert_eq!(end, fs_core::layers::WalkEnd::Complete, "{kind:?}");
+        assert!(bytes == wanted, "{kind:?}: not byte for byte");
+        assert!(
+            walk.extents.len() >= 2,
+            "{kind:?}: the live cluster is skipped"
+        );
+        // The plain run walks into the live file's cluster.
+        let (plain, end, _) = rebuilt(&image, "_.BIN", DeletedGuess::Contiguous);
+        assert_eq!(end, fs_core::layers::WalkEnd::Broken, "{kind:?}");
+        assert!(plain != wanted, "{kind:?}");
+        assert!(
+            !plain.windows(live.len()).any(|w| w == live)
+                || end == fs_core::layers::WalkEnd::Broken
+        );
+    }
+}
+
+#[test]
+fn a_contiguous_deleted_file_gives_the_same_walk_under_both_guesses() {
+    for (kind, size) in SIZES {
+        let built = build(kind, size);
+        let free = rebuilt(&built.image, "_ONE.TXT", DeletedGuess::FreeClusters);
+        let plain = rebuilt(&built.image, "_ONE.TXT", DeletedGuess::Contiguous);
+        assert_eq!(free.2, plain.2, "{kind:?}");
+        assert_eq!(free.0, plain.0, "{kind:?}");
+        assert_eq!(free.1, fs_core::layers::WalkEnd::Complete);
+        assert_eq!(free.0, pattern(3000, 7), "{kind:?}");
+    }
+}
+
+#[test]
+fn a_deleted_file_whose_gap_was_reused_by_another_deleted_file_is_a_known_limit() {
+    for (kind, size) in SIZES {
+        let disk = Disk::new(vec![0; size as usize]);
+        format(
+            &disk,
+            &FormatOptions {
+                kind: Some(kind),
+                ..FormatOptions::default()
+            },
+        )
+        .unwrap();
+        let mut volume = WriteVolume::mount(disk.clone()).unwrap();
+        let first = pattern(1500, 1);
+        let second = pattern(1500, 2);
+        let d = volume.create_file("/D.BIN").unwrap();
+        volume.write(&d, 0, &first).unwrap();
+        volume.unlink("/D.BIN").unwrap();
+        volume.unmount().unwrap();
+        // Another file, since deleted too, used D's cluster: what it left
+        // there is all that is there.
+        let mut image = disk.bytes();
+        let volume = Volume::open(Owned(image.clone())).unwrap();
+        let first_cluster = volume
+            .salvage()
+            .unwrap()
+            .all_candidates()
+            .unwrap()
+            .iter()
+            .find(|c| c.state == CandidateState::Deleted && c.detail.size == 1500)
+            .unwrap()
+            .detail
+            .first_cluster;
+        put(&mut image, first_cluster, &second);
+        // Both clusters are free again, and D's entry cannot tell whose
+        // bytes they hold: it reads F's. The guess documents this limit.
+        let (bytes, _, _) = rebuilt(&image, "_.BIN", DeletedGuess::FreeClusters);
+        assert_eq!(bytes, second, "{kind:?}");
+        assert_ne!(bytes, first, "{kind:?}");
+    }
+}
+
+#[test]
+fn the_free_cluster_guess_is_partial_when_the_volume_ends() {
+    let (mut image, _, _) = written_around(FatKind::Fat16, 8 * MIB);
+    // Claim a size that no free run to the end of the volume can cover.
+    let volume = Volume::open(Owned(image.clone())).unwrap();
+    let candidates = volume.salvage().unwrap().all_candidates().unwrap();
+    let gone = candidates
+        .iter()
+        .find(|c| c.state == CandidateState::Deleted && c.detail.size > 0)
+        .unwrap();
+    let at = gone.location.offset as usize + 28;
+    image[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let (_, end, walk) = rebuilt(&image, "_.BIN", DeletedGuess::FreeClusters);
+    assert_eq!(end, fs_core::layers::WalkEnd::OutOfRange);
+    assert!(walk.mapped() < walk.claimed);
+}
