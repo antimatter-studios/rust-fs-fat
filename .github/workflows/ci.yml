@@ -8,9 +8,24 @@ permissions:
   contents: read
 
 jobs:
+  # One gate for both legs: a matrix job's outputs are last-writer-wins, so each
+  # leg's runner is its own output, named for the leg's matrix.os.
+  test-gate:
+    runs-on: antimatter-vps-gate
+    timeout-minutes: 1
+    outputs:
+      ubuntu-latest: ${{ steps.pick-linux.outputs.runner }}
+      macos-latest: ${{ steps.pick-macos.outputs.runner }}
+    steps:
+      - id: pick-linux
+        run: runner-gate pick linux-x64
+      - id: pick-macos
+        run: runner-gate pick macos-arm64
+
   test:
     name: Rust on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    needs: test-gate
+    runs-on: ${{ needs.test-gate.outputs[matrix.os] }}
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +34,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: C toolchain for the gated runner
+        if: runner.os == 'Linux' && runner.environment == 'self-hosted'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.95.0
@@ -39,17 +57,30 @@ jobs:
       - name: Check documentation
         run: cargo doc --locked --no-deps
 
+  oracle-gate:
+    runs-on: antimatter-vps-gate
+    timeout-minutes: 1
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - id: pick
+        run: runner-gate pick linux-x64-kvm
+
   oracle:
     # The driver against mkfs.fat, fsck.fat, mtools and the kernel's vfat
     # driver (validation/generate.sh, tests/independent_validation.rs). Runs
     # natively as root on a Linux runner; locally the same tests run in the
     # Linux test VM through `chore test:oracle`.
     name: Independent oracles
-    runs-on: ubuntu-latest
+    needs: oracle-gate
+    runs-on: ${{ needs.oracle-gate.outputs.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: C toolchain for the gated runner
+        if: runner.environment == 'self-hosted'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.95.0
@@ -93,9 +124,19 @@ jobs:
   # [package.metadata.package-cli] declares and refuses it unless it holds
   # exactly that layout. This repository is checked out beside rust-fs-core
   # because package-cli runs in place from there, at the tag release.yml pins.
+  cli-gate:
+    runs-on: antimatter-vps-gate
+    timeout-minutes: 1
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - id: pick
+        run: runner-gate pick linux-x64
+
   cli:
     name: cli (the installed tool, on PATH, and its tarball)
-    runs-on: ubuntu-24.04
+    needs: cli-gate
+    runs-on: ${{ needs.cli-gate.outputs.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -108,6 +149,9 @@ jobs:
           ref: v0.4.5
           persist-credentials: false
           path: rust-fs-core
+      - name: C toolchain for the gated runner
+        if: runner.environment == 'self-hosted'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.95.0
