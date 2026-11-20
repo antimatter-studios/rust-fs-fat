@@ -18,7 +18,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test-gate:
+  gate-test:
     runs-on: antimatter-vps-gate
     timeout-minutes: 1
     outputs:
@@ -29,8 +29,8 @@ jobs:
 
   test:
     name: test
-    needs: test-gate
-    runs-on: ${{ needs.test-gate.outputs.runner }}
+    needs: gate-test
+    runs-on: ${{ needs.gate-test.outputs.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
