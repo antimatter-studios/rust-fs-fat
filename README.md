@@ -47,12 +47,16 @@ conformance checks on healthy and damaged FAT12, FAT16 and FAT32 volumes, and
 `tests/layers_oracle.rs` holds the layers' verdicts against what the kernel, mtools and
 `fsck.fat` say about the same images.
 
-A directory the tree from the root does not reach (its parent entry is lost) is found by the
-`.` and `..` entries that open its first cluster, and is read from that one cluster: its later
-clusters are not looked for, so that a scan returns the same records however its range is cut.
-
-`BootSector::parse` classifies the FAT variant using the standard data-cluster
-thresholds.
+A directory cluster the tree from the root does not reach is recognised on its own bytes, so a scan
+returns the same records however its range is cut. It is one when it opens with `.` and `..` naming
+itself, or when its content is a run of directory entries (`FoundBy::Content`): every 32-byte slot
+is empty, a long-name entry, or a short entry with allowed name characters, plausible attributes, a
+first cluster inside the volume, a size that fits, and real dates; and there are at least two short
+entries, or one whose long-name entries carry its checksum. File data that resembles one entry is
+not accepted. Entries found by content are `Integrity::Unchecked` (reachable ones are `Verified`),
+live when the cluster is allocated and deleted when it is free. A lost directory's later clusters
+are found the same way, each on its own. The cost is a read of every data cluster in the scanned
+range that opens with a plausible entry.
 
 ### A missing `0x55 0xAA` boot signature
 

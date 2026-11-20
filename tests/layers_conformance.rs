@@ -548,3 +548,159 @@ fn the_adapter_reports_what_it_cannot_do() {
     assert!(missing.contains(&fs_core::layers::Feature::GeometryHypotheses));
     assert_eq!(missing.len(), 2);
 }
+
+// ------------------------------------------------- orphaned directory clusters
+
+fn entry(name: &[u8; 11], first: u16, size: u32) -> [u8; 32] {
+    let mut raw = [0u8; 32];
+    raw[..11].copy_from_slice(name);
+    raw[11] = 0x20;
+    raw[26..28].copy_from_slice(&first.to_le_bytes());
+    raw[28..32].copy_from_slice(&size.to_le_bytes());
+    raw
+}
+
+/// The two highest free clusters of a healthy image.
+fn free_clusters(image: &[u8]) -> (u32, u32) {
+    let volume = Volume::open(Owned(image.to_vec())).unwrap();
+    let mut free = (2..volume.boot().cluster_count + 2).rev().filter(|c| {
+        matches!(
+            volume.fat_value(*c),
+            Ok(fs_fat32::primitives::FatValue::Free)
+        )
+    });
+    (free.next().unwrap(), free.next().unwrap())
+}
+
+fn put(image: &mut [u8], cluster: u32, bytes: &[u8]) {
+    let at = Volume::open(Owned(image.to_vec()))
+        .unwrap()
+        .cluster_offset(cluster)
+        .unwrap() as usize;
+    image[at..at + bytes.len()].copy_from_slice(bytes);
+}
+
+fn candidates_of(image: Vec<u8>) -> Vec<fs_core::layers::Candidate<fs_fat32::layers::FatDetail>> {
+    Volume::open_for_salvage(Owned(image))
+        .unwrap()
+        .salvage()
+        .unwrap()
+        .all_candidates()
+        .unwrap()
+}
+
+#[test]
+fn entries_in_an_orphaned_cluster_with_no_dot_entries_are_found_with_lower_confidence() {
+    for (kind, size) in SIZES {
+        let built = build(kind, size);
+        let (directory, data) = free_clusters(&built.image);
+        let mut run = Vec::new();
+        run.extend_from_slice(&entry(b"ORPHAN  TXT", data as u16, 5));
+        run.extend_from_slice(&entry(b"SECOND  BIN", 0, 0));
+        for allocated in [true, false] {
+            let mut image = built.image.clone();
+            put(&mut image, directory, &run);
+            put(&mut image, data, b"hello");
+            if allocated {
+                set_entry(&mut image, kind, directory, 0x0FFF_FFFF);
+            }
+            let found = candidates_of(image);
+            let orphan = found
+                .iter()
+                .find(|c| c.name.as_deref() == Some("ORPHAN.TXT"))
+                .unwrap_or_else(|| panic!("{kind:?}: ORPHAN.TXT is not found"));
+            assert_eq!(orphan.detail.found_by, fs_fat32::layers::FoundBy::Content);
+            assert_eq!(orphan.detail.directory, directory);
+            assert_eq!(orphan.integrity, Integrity::Unchecked);
+            assert_eq!(
+                orphan.state,
+                if allocated {
+                    CandidateState::Live
+                } else {
+                    CandidateState::Deleted
+                }
+            );
+            // Reachable entries keep their stronger evidence.
+            let hello = found
+                .iter()
+                .find(|c| c.name.as_deref() == Some("hello.txt"))
+                .unwrap();
+            assert_eq!(hello.integrity, Integrity::Verified);
+            assert_eq!(hello.detail.found_by, fs_fat32::layers::FoundBy::Tree);
+        }
+    }
+}
+
+#[test]
+fn file_data_that_resembles_an_entry_is_not_reported_as_a_directory() {
+    for (kind, size) in SIZES {
+        let built = build(kind, size);
+        let (cluster, _) = free_clusters(&built.image);
+        let lone = entry(b"LOOKS   TXT", 0, 0);
+        let cases: [(&str, Vec<u8>); 3] = [
+            ("one entry among zeros", lone.to_vec()),
+            (
+                "one entry among text",
+                [
+                    lone.to_vec(),
+                    b"The quick brown fox jumps over the lazy dog. ".repeat(8),
+                ]
+                .concat(),
+            ),
+            (
+                "entries among bytes that are not",
+                [
+                    lone.to_vec(),
+                    entry(b"ALSO    TXT", 0, 0).to_vec(),
+                    vec![0xFF; 32],
+                ]
+                .concat(),
+            ),
+        ];
+        for (name, bytes) in cases {
+            let mut image = built.image.clone();
+            put(&mut image, cluster, &bytes);
+            set_entry(&mut image, kind, cluster, 0x0FFF_FFFF);
+            let found = candidates_of(image);
+            assert!(
+                found
+                    .iter()
+                    .all(|c| c.detail.found_by == fs_fat32::layers::FoundBy::Tree
+                        || c.detail.directory != cluster),
+                "{kind:?} {name}: reported as a directory"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_scan_that_finds_orphaned_clusters_is_the_same_cut_at_any_range() {
+    let built = build(FatKind::Fat16, 8 * MIB);
+    let (directory, _) = free_clusters(&built.image);
+    let mut image = built.image.clone();
+    let mut run = entry(b"ORPHAN  TXT", 0, 0).to_vec();
+    run.extend_from_slice(&entry(b"SECOND  BIN", 0, 0));
+    put(&mut image, directory, &run);
+    set_entry(&mut image, FatKind::Fat16, directory, 0xFFFF);
+    let volume = Volume::open_for_salvage(Owned(image.clone())).unwrap();
+    let salvage = volume.salvage().unwrap();
+    let whole = salvage.all_candidates().unwrap();
+    assert!(whole
+        .iter()
+        .any(|c| c.name.as_deref() == Some("ORPHAN.TXT")));
+    for piece in [512u64, 4096, 5000, 65_536] {
+        let mut joined = Vec::new();
+        let mut at = 0;
+        while at < image.len() as u64 {
+            let length = piece.min(image.len() as u64 - at);
+            salvage
+                .find_candidates(Extent::new(at, length), &mut joined)
+                .unwrap();
+            at += length;
+        }
+        assert!(
+            joined == whole,
+            "pieces of {piece} bytes differ from the whole scan"
+        );
+    }
+}

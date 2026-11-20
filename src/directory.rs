@@ -146,7 +146,7 @@ pub(crate) fn scan_records(
     Ok(entries)
 }
 
-fn plausible_short_name(raw: &[u8]) -> bool {
+pub(crate) fn plausible_short_name(raw: &[u8]) -> bool {
     raw[11] & 0xC8 == 0
         && raw[12] & !0x18 == 0
         && raw[0] != b' '
