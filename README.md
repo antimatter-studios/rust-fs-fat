@@ -52,8 +52,9 @@ returns the same records however its range is cut. It is one when it opens with 
 itself, or when its content is a run of directory entries (`FoundBy::Content`): every 32-byte slot
 is empty, a long-name entry, or a short entry with allowed name characters, plausible attributes, a
 first cluster inside the volume, a size that fits, and real dates; and there are at least two short
-entries, or one whose long-name entries carry its checksum. File data that resembles one entry is
-not accepted. Entries found by content are `Integrity::Unchecked` (reachable ones are `Verified`),
+entries, or one whose long-name entries carry its checksum, or (the weakest evidence, marked
+`FatDetail::lone_entry`) one short entry with every other slot empty. File data that resembles one
+entry among other bytes is not accepted. Entries found by content are `Integrity::Unchecked` (reachable ones are `Verified`),
 live when the cluster is allocated and deleted when it is free. A lost directory's later clusters
 are found the same way, each on its own. The cost is a read of every data cluster in the scanned
 range that opens with a plausible entry.

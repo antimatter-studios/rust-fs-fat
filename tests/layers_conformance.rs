@@ -638,7 +638,13 @@ fn file_data_that_resembles_an_entry_is_not_reported_as_a_directory() {
         let (cluster, _) = free_clusters(&built.image);
         let lone = entry(b"LOOKS   TXT", 0, 0);
         let cases: [(&str, Vec<u8>); 3] = [
-            ("one entry among zeros", lone.to_vec()),
+            ("one entry beside a stray long-name entry", {
+                let mut stray = [0u8; 32];
+                stray[0] = 0x41;
+                stray[11] = 0x0F;
+                stray[13] = 0x99;
+                [stray.to_vec(), lone.to_vec()].concat()
+            }),
             (
                 "one entry among text",
                 [
@@ -702,5 +708,50 @@ fn a_scan_that_finds_orphaned_clusters_is_the_same_cut_at_any_range() {
             joined == whole,
             "pieces of {piece} bytes differ from the whole scan"
         );
+    }
+}
+
+#[test]
+fn a_lone_entry_in_an_orphaned_cluster_is_found_as_the_weakest_candidate() {
+    for (kind, size) in SIZES {
+        let built = build(kind, size);
+        let (directory, data) = free_clusters(&built.image);
+        let mut image = built.image.clone();
+        put(
+            &mut image,
+            directory,
+            &entry(b"ORPHAN  TXT", data as u16, 5),
+        );
+        put(&mut image, data, b"hello");
+        set_entry(&mut image, kind, directory, 0x0FFF_FFFF);
+        let found = candidates_of(image.clone());
+        let orphan = found
+            .iter()
+            .find(|c| c.name.as_deref() == Some("ORPHAN.TXT"))
+            .unwrap_or_else(|| panic!("{kind:?}: the lone ORPHAN.TXT is not found"));
+        assert_eq!(orphan.detail.found_by, fs_fat32::layers::FoundBy::Content);
+        assert!(orphan.detail.lone_entry, "{kind:?}");
+        assert_eq!(orphan.detail.directory, directory);
+        assert_eq!(orphan.integrity, Integrity::Unchecked);
+        // Two entries are stronger evidence: no lone flag.
+        put(
+            &mut image,
+            directory,
+            &[
+                entry(b"ORPHAN  TXT", data as u16, 5),
+                entry(b"SECOND  BIN", 0, 0),
+            ]
+            .concat(),
+        );
+        let two = candidates_of(image);
+        assert!(two
+            .iter()
+            .filter(|c| c.detail.directory == directory)
+            .all(|c| !c.detail.lone_entry));
+        // Reachable entries are never marked lone.
+        assert!(found
+            .iter()
+            .filter(|c| c.detail.directory != directory)
+            .all(|c| !c.detail.lone_entry));
     }
 }
