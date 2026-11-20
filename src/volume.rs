@@ -4,6 +4,15 @@ use fs_core::{BlockRead, FileDevice, OwnedSlice, ReadOnlyDevice};
 use std::path::Path;
 use std::sync::Arc;
 
+/// The volume layer this crate had before `fs_core::layers`.
+///
+/// Superseded by `fs_core::layers::VolumeAPI`, which [`Volume`] now also
+/// implements (see [`crate::layers`]). This trait stays for one release as a
+/// thin wrapper over the same reads.
+#[deprecated(
+    since = "0.2.0",
+    note = "use fs_core::layers::VolumeAPI, implemented by fs_fat32::Volume; removed in the next release"
+)]
 pub trait VolumeAPI {
     fn size_bytes(&self) -> u64;
     fn read_volume_bytes(&self, offset: u64, output: &mut [u8]) -> Result<()>;
@@ -19,6 +28,7 @@ impl<Device: BlockRead> RawVolume<Device> {
     }
 }
 
+#[allow(deprecated)]
 impl<Device: BlockRead> VolumeAPI for RawVolume<Device> {
     fn size_bytes(&self) -> u64 {
         self.device.size_bytes()
@@ -39,6 +49,12 @@ impl<Device: BlockRead> VolumeAPI for RawVolume<Device> {
 pub struct Volume<Device: BlockRead> {
     device: Device,
     boot: BootSector,
+    /// Where the boot sector that was read lies: 0 for the primary, or the
+    /// byte offset of the FAT32 backup a salvage open fell back to.
+    boot_at: u64,
+    /// The bytes this volume can read: the volume length its boot sector
+    /// declares, and no more than the device holds.
+    size: u64,
 }
 
 impl<Device: BlockRead> Volume<Device> {
@@ -50,7 +66,46 @@ impl<Device: BlockRead> Volume<Device> {
         if volume_size > device.size_bytes() {
             return Err(Error::Invalid("BPB volume length exceeds device"));
         }
-        Ok(Self { device, boot })
+        Ok(Self {
+            size: volume_size,
+            device,
+            boot,
+            boot_at: 0,
+        })
+    }
+
+    /// Opens a volume for salvage: a boot sector that fails to read or does
+    /// not decode is replaced by the FAT32 backup, and a volume longer than
+    /// its device (a truncated image) opens as far as the device goes.
+    pub(crate) fn open_salvage(device: Device) -> Result<Self> {
+        if device.size_bytes() < 512 {
+            return Err(Error::Invalid("device is shorter than a boot sector"));
+        }
+        let mut sector = [0u8; 512];
+        let primary = device
+            .read_at(0, &mut sector)
+            .map_err(Error::from)
+            .and_then(|()| BootSector::parse(&sector));
+        let (boot, boot_at) = match primary {
+            Ok(boot) => (boot, 0),
+            Err(error) => {
+                let backup = backup_boot(&device, &sector).ok_or(error)?;
+                (backup.0, backup.1)
+            }
+        };
+        let declared = u64::from(boot.total_sectors) * u64::from(boot.bytes_per_sector);
+        Ok(Self {
+            size: declared.min(device.size_bytes()),
+            device,
+            boot,
+            boot_at,
+        })
+    }
+
+    /// The byte offset of the boot sector this volume was read from: 0, or
+    /// the FAT32 backup a salvage open fell back to.
+    pub fn boot_sector_offset(&self) -> u64 {
+        self.boot_at
     }
 
     pub fn boot(&self) -> &BootSector {
@@ -81,26 +136,80 @@ impl<Device: BlockRead> Volume<Device> {
         if output.len() as u64 != self.boot.cluster_size() {
             return Err(Error::Invalid("cluster buffer has wrong length"));
         }
-        self.read_volume_bytes(self.cluster_offset(cluster)?, output)
-    }
-}
-
-impl<Device: BlockRead> VolumeAPI for Volume<Device> {
-    fn size_bytes(&self) -> u64 {
-        u64::from(self.boot.total_sectors) * u64::from(self.boot.bytes_per_sector)
+        self.read_bytes(self.cluster_offset(cluster)?, output)
     }
 
-    fn read_volume_bytes(&self, offset: u64, output: &mut [u8]) -> Result<()> {
+    /// The bytes this volume can read: its declared length, or the device's
+    /// when a salvage open found the device shorter.
+    pub fn len(&self) -> u64 {
+        self.size
+    }
+
+    /// Whether the volume reads no bytes at all.
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
+    }
+
+    /// Reads volume bytes; the same read as `read_volume_bytes` on either
+    /// `VolumeAPI`, without needing a trait in scope.
+    pub fn read_bytes(&self, offset: u64, output: &mut [u8]) -> Result<()> {
         let end = offset
             .checked_add(output.len() as u64)
             .ok_or(Error::Bounds)?;
-        let volume_end = u64::from(self.boot.total_sectors) * u64::from(self.boot.bytes_per_sector);
-        if end > volume_end {
+        if end > self.size {
             return Err(Error::Bounds);
         }
         self.device.read_at(offset, output)?;
         Ok(())
     }
+}
+
+#[allow(deprecated)]
+impl<Device: BlockRead> VolumeAPI for Volume<Device> {
+    fn size_bytes(&self) -> u64 {
+        self.size
+    }
+
+    fn read_volume_bytes(&self, offset: u64, output: &mut [u8]) -> Result<()> {
+        self.read_bytes(offset, output)
+    }
+}
+
+/// The FAT32 backup boot sector of a volume whose primary does not decode,
+/// and where it was found. The primary's own field says where the backup is
+/// when that byte survives; sector 6 is where every formatter puts it.
+pub(crate) fn backup_boot(
+    device: &dyn BlockRead,
+    primary: &[u8; 512],
+) -> Option<(BootSector, u64)> {
+    let named = u64::from(u16::from_le_bytes([primary[50], primary[51]]));
+    let sector_sizes = {
+        let named = u64::from(u16::from_le_bytes([primary[11], primary[12]]));
+        [named, 512, 1024, 2048, 4096]
+    };
+    for sector_size in sector_sizes {
+        if !matches!(sector_size, 512 | 1024 | 2048 | 4096) {
+            continue;
+        }
+        for sector in [named, 6] {
+            let offset = sector * sector_size;
+            if sector == 0 || offset + 512 > device.size_bytes() {
+                continue;
+            }
+            let mut bytes = [0u8; 512];
+            if device.read_at(offset, &mut bytes).is_err() {
+                continue;
+            }
+            if let Ok(boot) = BootSector::parse(&bytes) {
+                if boot.kind == crate::FatKind::Fat32
+                    && u64::from(boot.bytes_per_sector) == sector_size
+                {
+                    return Some((boot, offset));
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn open_device<Device: BlockRead + 'static>(

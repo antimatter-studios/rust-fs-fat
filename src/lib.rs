@@ -3,6 +3,7 @@
 pub mod boot;
 pub mod directory;
 pub mod file;
+pub mod layers;
 pub mod mkfs;
 pub mod primitives;
 pub mod timestamp;
@@ -84,6 +85,21 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<fs_core::layers::ApiError> for Error {
+    fn from(error: fs_core::layers::ApiError) -> Self {
+        use fs_core::layers::ApiError;
+        match error {
+            ApiError::Unsupported(what) => Self::Unsupported(what),
+            ApiError::NotFound(_) => Self::NotFound,
+            ApiError::NotADirectory(_) => Self::NotADirectory,
+            ApiError::IsADirectory(_) => Self::IsADirectory,
+            ApiError::Bounds { .. } => Self::Bounds,
+            ApiError::Sink(error) => Self::Device(fs_core::Error::Io(error)),
+            _ => Self::Invalid("a shared layer refused the request"),
+        }
+    }
+}
 
 impl From<fs_core::Error> for Error {
     fn from(error: fs_core::Error) -> Self {

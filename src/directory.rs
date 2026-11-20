@@ -28,7 +28,27 @@ pub fn scan_directory(bytes: &[u8], kind: FatKind) -> Result<Vec<DirectoryRecord
     directory_records(bytes, kind, true)
 }
 
+/// A directory record with what the scan learned about its long name: `None`
+/// when no long-name entries preceded it (or it is deleted), `Some(true)` when
+/// they formed a name carrying the short name's checksum, `Some(false)` when
+/// some preceded it and none was usable (a broken sequence, another checksum).
+pub(crate) struct ScannedRecord {
+    pub record: DirectoryRecord,
+    pub long_name_ok: Option<bool>,
+}
+
 fn directory_records(bytes: &[u8], kind: FatKind, salvage: bool) -> Result<Vec<DirectoryRecord>> {
+    Ok(scan_records(bytes, kind, salvage)?
+        .into_iter()
+        .map(|scanned| scanned.record)
+        .collect())
+}
+
+pub(crate) fn scan_records(
+    bytes: &[u8],
+    kind: FatKind,
+    salvage: bool,
+) -> Result<Vec<ScannedRecord>> {
     if !bytes.len().is_multiple_of(32) {
         return Err(Error::Invalid("directory data is not entry aligned"));
     }
@@ -36,6 +56,8 @@ fn directory_records(bytes: &[u8], kind: FatKind, salvage: bool) -> Result<Vec<D
     let mut lfn = Vec::<u16>::new();
     let mut lfn_expected = 0u8;
     let mut lfn_checksum = None;
+    // Whether any long-name entry has come since the last short entry.
+    let mut lfn_seen = false;
     for (index, raw) in bytes.chunks_exact(32).enumerate() {
         if raw[0] == 0 {
             if !salvage {
@@ -47,6 +69,7 @@ fn directory_records(bytes: &[u8], kind: FatKind, salvage: bool) -> Result<Vec<D
             continue;
         }
         if raw[11] == 0x0F {
+            lfn_seen = true;
             let sequence = raw[0] & 0x1F;
             if sequence == 0 || sequence > 20 || raw[12] != 0 || raw[26] != 0 || raw[27] != 0 {
                 lfn.clear();
@@ -84,9 +107,14 @@ fn directory_records(bytes: &[u8], kind: FatKind, salvage: bool) -> Result<Vec<D
             continue;
         }
         let short = short_name(raw, deleted);
-        let long = (lfn_expected == 0 && lfn_checksum == Some(short_checksum(&raw[..11])))
+        let matches = lfn_checksum == Some(short_checksum(&raw[..11]));
+        let long = (lfn_expected == 0 && matches)
             .then(|| lfn_name(&lfn))
             .flatten();
+        // A deleted entry's long-name entries lost their first byte too,
+        // so they say nothing either way.
+        let long_name_ok = (lfn_seen && !deleted).then_some(long.is_some());
+        lfn_seen = false;
         let name = long.unwrap_or(short);
         lfn.clear();
         lfn_expected = 0;
@@ -100,16 +128,19 @@ fn directory_records(bytes: &[u8], kind: FatKind, salvage: bool) -> Result<Vec<D
             0
         };
         let low = u32::from(u16::from_le_bytes([raw[26], raw[27]]));
-        entries.push(DirectoryRecord {
-            offset: index * 32,
-            raw: raw.try_into().unwrap(),
-            entry: DirectoryEntry {
-                name,
-                attributes: raw[11],
-                first_cluster: (high << 16) | low,
-                size: u32::from_le_bytes(raw[28..32].try_into().unwrap()),
-                deleted,
+        entries.push(ScannedRecord {
+            record: DirectoryRecord {
+                offset: index * 32,
+                raw: raw.try_into().unwrap(),
+                entry: DirectoryEntry {
+                    name,
+                    attributes: raw[11],
+                    first_cluster: (high << 16) | low,
+                    size: u32::from_le_bytes(raw[28..32].try_into().unwrap()),
+                    deleted,
+                },
             },
+            long_name_ok,
         });
     }
     Ok(entries)
@@ -162,7 +193,7 @@ pub(crate) fn short_name(raw: &[u8], deleted: bool) -> String {
 /// page 437 is the default of Windows and of the Linux `codepage=437` mount
 /// option. Padding is cut by byte, because code page 437 maps 0xFF to a
 /// no-break space that a text trim would also remove.
-fn oem_text(bytes: &[u8]) -> String {
+pub(crate) fn oem_text(bytes: &[u8]) -> String {
     let end = bytes
         .iter()
         .rposition(|byte| *byte != b' ')

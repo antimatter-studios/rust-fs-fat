@@ -6,13 +6,15 @@
 //! read would, and over the damage that sends the readers down their error
 //! paths. The device can write; the point is that the read-only constructors
 //! never ask it to.
+// This file still uses the superseded `file`, `primitives` and `volume` traits,
+// which stay one release as deprecated wrappers; it moves to `fs_core::layers` then.
+#![allow(deprecated)]
 
 mod support;
 
 use fs_core::FileDevice;
 use fs_fat32::directory::{parse_directory, scan_directory};
 use fs_fat32::file::FileAPI;
-use fs_fat32::primitives::PrimitiveAPI;
 use fs_fat32::volume::{open_device, open_path, open_raw_device, RawVolume, Volume, VolumeAPI};
 use fs_fat32::FatKind;
 use std::path::PathBuf;

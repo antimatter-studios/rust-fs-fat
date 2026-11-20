@@ -5,6 +5,9 @@
 //! the output contract every tool shares are `fs_core::cli` (rust-fs-core's
 //! `cli` feature); `fs` is the tool itself, and a tool added later (`mkfs`,
 //! the checker) is one more entry in `FAMILY.tools`, in a module of its own.
+// This file still uses the superseded `file`, `primitives` and `volume` traits,
+// which stay one release as deprecated wrappers; it moves to `fs_core::layers` then.
+#![allow(deprecated)]
 
 mod fs;
 

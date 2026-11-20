@@ -1,4 +1,7 @@
 //! The formatter: the layouts it chooses, what it writes, and what it refuses.
+// This file still uses the superseded `file`, `primitives` and `volume` traits,
+// which stay one release as deprecated wrappers; it moves to `fs_core::layers` then.
+#![allow(deprecated)]
 
 mod support;
 

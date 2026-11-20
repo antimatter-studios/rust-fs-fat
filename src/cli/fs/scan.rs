@@ -15,7 +15,7 @@ use fs_core::cli::clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
 use fs_core::cli::listing::{self, ListBounds};
 use fs_core::cli::{CliError, Json, Outcome};
 use fs_fat32::directory::scan_directory;
-use fs_fat32::primitives::{FatValue, PrimitiveAPI};
+use fs_fat32::primitives::FatValue;
 
 pub const SCAN: Verb = Verb {
     name: "scan",

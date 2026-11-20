@@ -6,7 +6,6 @@ use super::names;
 use super::WriteVolume;
 use crate::boot::FatKind;
 use crate::directory::{short_checksum, short_name};
-use crate::volume::VolumeAPI;
 use crate::{Error, Result};
 use fs_core::BlockDevice;
 
@@ -180,7 +179,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
             let length = u64::from(boot.root_dir_sectors) * u64::from(boot.bytes_per_sector);
             let mut bytes = vec![0u8; length as usize];
             self.volume
-                .read_volume_bytes(self.fixed_root_offset(), &mut bytes)?;
+                .read_bytes(self.fixed_root_offset(), &mut bytes)?;
             return Ok(DirStream {
                 id,
                 bytes,
@@ -193,7 +192,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
         for (index, cluster) in clusters.iter().enumerate() {
             let offset = self.volume.cluster_offset(*cluster)?;
             self.volume
-                .read_volume_bytes(offset, &mut bytes[index * size..(index + 1) * size])?;
+                .read_bytes(offset, &mut bytes[index * size..(index + 1) * size])?;
         }
         Ok(DirStream {
             id,

@@ -1,10 +1,12 @@
 //! The write capability: refused unless asked for, bounded, flagged dirty
 //! while it changes things and clean when it closes.
+// This file still uses the superseded `file`, `primitives` and `volume` traits,
+// which stay one release as deprecated wrappers; it moves to `fs_core::layers` then.
+#![allow(deprecated)]
 
 mod support;
 
 use fs_core::BlockRead;
-use fs_fat32::primitives::PrimitiveAPI;
 use fs_fat32::volume::VolumeAPI;
 use fs_fat32::write::{open_raw_writable, open_writable, RawWriteVolume, WriteVolume};
 use fs_fat32::{Error, FatKind};

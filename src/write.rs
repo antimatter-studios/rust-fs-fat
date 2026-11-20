@@ -46,9 +46,10 @@
 //! device to put them on stable storage.
 
 use crate::boot::FatKind;
-use crate::primitives::PrimitiveAPI;
 use crate::timestamp::FatTimestamp;
-use crate::volume::{Volume, VolumeAPI};
+use crate::volume::Volume;
+#[allow(deprecated)]
+use crate::volume::VolumeAPI;
 use crate::{Error, Result};
 use fs_core::{BlockDevice, FileDevice, OwnedRwSlice};
 use std::collections::{BTreeMap, HashMap};
@@ -141,7 +142,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
         }
         let boot = volume.boot().clone();
         let mut sector = [0u8; 512];
-        volume.read_volume_bytes(0, &mut sector)?;
+        volume.read_bytes(0, &mut sector)?;
         let mirroring_off = boot.kind == FatKind::Fat32 && sector[40] & 0x80 != 0;
         let fat_copies = if mirroring_off {
             vec![boot.active_fat]
@@ -332,7 +333,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
             return Ok(());
         };
         let mut state = [0u8];
-        self.volume.read_volume_bytes(offset as u64, &mut state)?;
+        self.volume.read_bytes(offset as u64, &mut state)?;
         if clean {
             state[0] &= !STATE_DIRTY;
         } else {
@@ -356,7 +357,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
             return Ok(());
         }
         let end = offset.checked_add(data.len() as u64).ok_or(Error::Bounds)?;
-        if end > self.volume.size_bytes() {
+        if end > self.volume.len() {
             return Err(Error::Bounds);
         }
         let sector = u64::from(self.volume.boot().bytes_per_sector);
@@ -405,8 +406,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
                 for index in offset / sector..=(offset + length - 1) / sector {
                     if let std::collections::btree_map::Entry::Vacant(slot) = sectors.entry(index) {
                         let mut bytes = vec![0u8; sector as usize];
-                        self.volume
-                            .read_volume_bytes(base + index * sector, &mut bytes)?;
+                        self.volume.read_bytes(base + index * sector, &mut bytes)?;
                         slot.insert(bytes);
                     }
                 }
@@ -486,7 +486,7 @@ fn fsinfo_state<Device: BlockDevice>(
         return Ok(None);
     }
     let mut info = [0u8; 512];
-    volume.read_volume_bytes(number * sector, &mut info)?;
+    volume.read_bytes(number * sector, &mut info)?;
     let word = |at: usize| u32::from_le_bytes([info[at], info[at + 1], info[at + 2], info[at + 3]]);
     if word(0) != 0x4161_5252 || word(484) != 0x6141_7272 || word(508) != 0xAA55_0000 {
         return Ok(None);
@@ -576,6 +576,7 @@ impl<Device: BlockDevice> RawWriteVolume<Device> {
     }
 }
 
+#[allow(deprecated)]
 impl<Device: BlockDevice> VolumeAPI for RawWriteVolume<Device> {
     fn size_bytes(&self) -> u64 {
         self.device.size_bytes()

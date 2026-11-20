@@ -12,14 +12,44 @@ handled behind shared APIs.
 
 ## API layers
 
-- `VolumeAPI` reads raw volume bytes; `RawVolume` works even when the boot
-  sector is damaged, while `Volume` adds checked BPB geometry.
-- `PrimitiveAPI` decodes raw FAT entries and returns best-effort cluster-chain
-  candidates, stopping safely at broken links, special values, loops, and
-  caller-supplied limits.
-- `FileAPI` lists valid root entries and opens files for bounded random-access
-  reads. It does not write or repair the volume.
+The driver implements the three API layers every rust-fs driver shares, defined once in
+`rust-fs-core` (`fs_core::layers`, cargo feature `layers`; `docs/three-layers.md` there is the
+narrative). `fs_fat32::Volume` implements all of them, and `fs_fat32::layers` holds what is
+specific to FAT behind them: the boot sector and its FAT32 backup, both FAT copies, cluster
+chains, and directory entries with long names and code page 437 short names.
+
+- **`VolumeAPI` and `OpenVolume`**: `Volume::probe` says whether a source holds FAT without
+  opening it (`Yes`, `Damaged`, `No`), `open` takes a volume whose boot sector validates, and
+  `open_for_salvage` also takes one whose primary boot sector is gone when the FAT32 backup boot
+  sector survives, or whose image is shorter than it declares. `format()` is `fat12`, `fat16` or
+  `fat32`; `geometry()`, `superblock()` (the decoded `BootSector`), `superblocks()` (primary and
+  FAT32 backup), `support()` and the quick `health()` verdict follow the contract.
+- **`PrimitiveAPI` and `SalvageAdapter`**: read-only by type, damage-tolerant. `structures()`
+  lists the boot sectors, FSInfo, each FAT copy and the root directory. `FatAdapter` holds
+  geometry and no device, and answers `find_candidates` (every directory entry of every directory
+  cluster, live or deleted, with its long name, checksum state and times), `walk_extents` (the FAT
+  chain, or for a deleted entry the run of clusters it was stored in), `rebuild_tree`,
+  `report_damage` (boot sectors, FAT copies against each other, every FAT entry, each chain
+  against its size, cross-links, lost clusters), `read_extent` and `cluster_layout`;
+  materialising a plan is core's. Not offered: `EncodedExtents` (FAT stores nothing encoded) and
+  `GeometryHypotheses` (a FAT12 or FAT16 volume keeps no backup boot sector to build one from).
+  The FAT-specific reads stay inherent methods of `Volume`: `fat_entry_raw`, `fat_value`,
+  `chain_candidates`.
+- **`FileAPI`**: `root`, `read_dir`, `metadata` (attributes and the three FAT times, read as
+  UTC), `read_at`, with core's `lookup`, `copy_to` and the case-insensitive `names_match` FAT
+  needs. It does not write or repair the volume.
 - `write::WriteVolume` is the only way to change a volume (see below).
+
+The traits this crate had before (`volume::VolumeAPI`, `primitives::PrimitiveAPI`,
+`file::FileAPI`) stay for one release as `#[deprecated]` wrappers over the same reads, and
+`RawVolume` and `RawWriteVolume` are unchanged. `tests/layers_conformance.rs` runs rust-fs-core's
+conformance checks on healthy and damaged FAT12, FAT16 and FAT32 volumes, and
+`tests/layers_oracle.rs` holds the layers' verdicts against what the kernel, mtools and
+`fsck.fat` say about the same images.
+
+A directory the tree from the root does not reach (its parent entry is lost) is found by the
+`.` and `..` entries that open its first cluster, and is read from that one cluster: its later
+clusters are not looked for, so that a scan returns the same records however its range is cut.
 
 `BootSector::parse` classifies the FAT variant using the standard data-cluster
 thresholds.
@@ -211,7 +241,7 @@ device); the formatter and the checker are further tools in `FAMILY.tools` in
 
 ### Dependencies and licences
 
-Without the `cli` feature the only dependency is `rust-fs-core` (MIT). The feature adds
+Without the `cli` feature the dependencies are `rust-fs-core` (MIT) with its `layers` feature, and `serde` (MIT or Apache-2.0), which the salvage evidence is serialised with; `layers` adds sha2 (MIT or Apache-2.0). The feature adds
 `rust-fs-core`'s `cli` dependencies, all permissive: clap, clap_complete and clap_mangen
 (MIT or Apache-2.0), serde, serde_json and sha2 (MIT or Apache-2.0), signal-hook
 (Apache-2.0 or MIT), xattr, rustix, libc, errno and the other crates they pull in (MIT or
