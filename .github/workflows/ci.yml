@@ -8,28 +8,61 @@ permissions:
   contents: read
 
 jobs:
-  # One gate for both legs: a matrix job's outputs are last-writer-wins, so each
-  # leg's runner is its own output, named for the leg's matrix.os.
-  test-gate:
+  # One job per platform, each with its own gate, so each platform picks its
+  # own runner.
+  test-linux-gate:
     runs-on: antimatter-vps-gate
     timeout-minutes: 1
     outputs:
-      ubuntu-latest: ${{ steps.pick-linux.outputs.runner }}
-      macos-latest: ${{ steps.pick-macos.outputs.runner }}
+      runner: ${{ steps.pick.outputs.runner }}
     steps:
-      - id: pick-linux
+      - id: pick
         run: runner-gate pick linux-x64
-      - id: pick-macos
+
+  test-linux:
+    name: Rust on ubuntu-latest
+    needs: [test-linux-gate]
+    runs-on: ${{ needs.test-linux-gate.outputs.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: C toolchain for the gated runner
+        if: runner.os == 'Linux' && runner.environment == 'self-hosted'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Lint the command-line tool
+        run: cargo clippy --locked --all-targets --features cli -- -D warnings
+      # The library alone, with no CLI dependency, then the tool's own tests.
+      - name: Build the library without the cli feature
+        run: cargo build --locked
+      - name: Test
+        run: cargo test --locked
+      - name: Test the command-line tool
+        run: cargo test --locked --features cli
+      - name: Check documentation
+        run: cargo doc --locked --no-deps
+
+  test-macos-gate:
+    runs-on: antimatter-vps-gate
+    timeout-minutes: 1
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+    steps:
+      - id: pick
         run: runner-gate pick macos-arm64
 
-  test:
-    name: Rust on ${{ matrix.os }}
-    needs: test-gate
-    runs-on: ${{ needs.test-gate.outputs[matrix.os] }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  test-macos:
+    name: Rust on macos-latest
+    needs: [test-macos-gate]
+    runs-on: ${{ needs.test-macos-gate.outputs.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
