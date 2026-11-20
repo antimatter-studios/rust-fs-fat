@@ -19,9 +19,10 @@
 //! short entry (name characters allowed, attribute bits a file can have,
 //! first cluster 0 or inside the volume, size fitting the volume and 0 for a
 //! directory, real dates where set), and there are at least two short
-//! entries, or one whose long-name entries carry its checksum. A cluster of
-//! file data that resembles one entry, or a few entries among other bytes,
-//! is not accepted. Entries found by content are `Integrity::Unchecked`,
+//! entries, or one whose long-name entries carry its checksum, or, as the
+//! weakest evidence (`FatDetail::lone_entry`), one short entry with every
+//! other slot empty. A cluster of file data that resembles one entry among
+//! other bytes, or a few entries among other bytes, is not accepted. Entries found by content are `Integrity::Unchecked`,
 //! below the `Verified` of the tree's, and are reported as live when the
 //! cluster is allocated and deleted when it is free in the FAT. A
 //! directory's later clusters, once nothing points to it, are found the same
@@ -93,6 +94,12 @@ pub struct FatDetail {
     /// How the directory cluster that holds the entry was recognised.
     #[serde(default)]
     pub found_by: FoundBy,
+    /// The entry is the only one in its cluster, which nothing points to and
+    /// which has no `.` and `..`: the weakest evidence a candidate has, a
+    /// single plausible entry with every other slot empty. Only with
+    /// `FoundBy::Content`.
+    #[serde(default)]
+    pub lone_entry: bool,
     /// Creation, modification and access times as `YYYY-MM-DDTHH:MM:SS`,
     /// with no zone, as the entry stores them.
     pub created: Option<String>,
@@ -583,6 +590,7 @@ pub(super) struct DirCluster {
     /// The directory was freed: its first cluster is free in the FAT.
     pub deleted: bool,
     pub found_by: FoundBy,
+    pub lone: bool,
 }
 
 /// The directory clusters of a volume.
@@ -612,7 +620,7 @@ impl FatAdapter {
             // following the FAT from a head that a narrower range may not
             // hold, and the same scan must give the same records however
             // its range is cut.
-            for (cluster, found_by) in self.head_candidates(source, range, &found) {
+            for (cluster, found_by, lone) in self.head_candidates(source, range, &found) {
                 let freed = matches!(self.fat_value(source, cluster), Ok(FatValue::Free));
                 found.clusters.insert(
                     cluster,
@@ -621,6 +629,7 @@ impl FatAdapter {
                         previous: None,
                         deleted: freed,
                         found_by,
+                        lone,
                     },
                 );
             }
@@ -658,6 +667,7 @@ impl FatAdapter {
                         previous,
                         deleted,
                         found_by: FoundBy::Tree,
+                        lone: false,
                     },
                 );
                 previous = Some(cluster);
@@ -691,7 +701,7 @@ impl FatAdapter {
         source: &dyn BlockRead,
         range: Extent,
         found: &Discovery,
-    ) -> Vec<(u32, FoundBy)> {
+    ) -> Vec<(u32, FoundBy, bool)> {
         let layout = self.layout();
         let Some(end) = range.end() else {
             return Vec::new();
@@ -715,7 +725,7 @@ impl FatAdapter {
                 continue;
             }
             if self.opens_a_directory(&bytes, cluster) {
-                heads.push((cluster, FoundBy::DotEntries));
+                heads.push((cluster, FoundBy::DotEntries, false));
                 continue;
             }
             // Only a cluster that starts with an entry is read whole.
@@ -725,8 +735,10 @@ impl FatAdapter {
                 continue;
             }
             let (whole, unreadable) = self.read_lenient(source, extent);
-            if unreadable.is_empty() && self.looks_like_directory(&whole) {
-                heads.push((cluster, FoundBy::Content));
+            if unreadable.is_empty() {
+                if let Some(lone) = self.looks_like_directory(&whole) {
+                    heads.push((cluster, FoundBy::Content, lone));
+                }
             }
         }
         heads
@@ -773,8 +785,13 @@ impl FatAdapter {
     /// plausible, and there is a run: two short entries, or one whose
     /// long-name entries carry its checksum. File data that resembles one
     /// entry, or a few entries among bytes that are not, is not accepted.
-    fn looks_like_directory(&self, cluster: &[u8]) -> bool {
+    ///
+    /// `Some(true)` is the weakest case: one plausible short entry, no
+    /// long-name entries, every other slot empty. Anything else non-empty
+    /// beside a single entry refuses the cluster.
+    fn looks_like_directory(&self, cluster: &[u8]) -> Option<bool> {
         let mut shorts = 0;
+        let mut longs = 0;
         let mut verified = 0;
         let mut checksum = None;
         for raw in cluster.chunks_exact(32) {
@@ -783,9 +800,10 @@ impl FatAdapter {
                 continue;
             }
             if !self.plausible_slot(raw) {
-                return false;
+                return None;
             }
             if raw[11] == 0x0F {
+                longs += 1;
                 checksum = Some(raw[13]);
             } else {
                 shorts += 1;
@@ -795,7 +813,11 @@ impl FatAdapter {
                 checksum = None;
             }
         }
-        shorts >= 2 || verified >= 1
+        if shorts >= 2 || verified >= 1 {
+            Some(false)
+        } else {
+            (shorts == 1 && longs == 0).then_some(true)
+        }
     }
 
     fn opens_a_directory(&self, head: &[u8; 64], cluster: u32) -> bool {
@@ -859,9 +881,9 @@ impl SalvageAdapter for FatAdapter {
             let to = extent.end()?.min(end);
             (to > from).then(|| Extent::new(from, to - from))
         };
-        let mut areas: Vec<(Extent, u32, Option<u32>, bool, FoundBy)> = Vec::new();
+        let mut areas: Vec<(Extent, u32, Option<u32>, bool, FoundBy, bool)> = Vec::new();
         if self.boot.kind != FatKind::Fat32 {
-            areas.push((self.fixed_root(), 0, None, false, FoundBy::Tree));
+            areas.push((self.fixed_root(), 0, None, false, FoundBy::Tree, false));
         }
         for (cluster, info) in &discovery.clusters {
             areas.push((
@@ -870,9 +892,10 @@ impl SalvageAdapter for FatAdapter {
                 info.previous,
                 info.deleted,
                 info.found_by,
+                info.lone,
             ));
         }
-        for (area, directory, previous, deleted, found_by) in areas {
+        for (area, directory, previous, deleted, found_by, lone) in areas {
             let Some(area_end) = area.end() else { continue };
             if area.offset >= end || area_end <= range.offset || area_end > size {
                 continue;
@@ -947,6 +970,7 @@ impl SalvageAdapter for FatAdapter {
                         size: entry.size,
                         directory,
                         found_by,
+                        lone_entry: lone,
                         created: time_text(word(16), word(14)),
                         modified: time_text(word(24), word(22)),
                         accessed: time_text(word(18), 0),
