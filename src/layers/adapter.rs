@@ -113,11 +113,48 @@ pub struct FatDetail {
 pub struct FatAdapter {
     boot: BootSector,
     boot_at: u64,
+    guess: DeletedGuess,
+}
+
+/// How the clusters of a deleted file are guessed. Deleting a file zeroes its
+/// chain in the FAT, so its clusters are not recorded anywhere: every walk of
+/// a deleted entry is a guess from its first cluster and its size, and
+/// reads back whatever those clusters hold now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeletedGuess {
+    /// From the first cluster onward, the next clusters that are free in the
+    /// FAT, skipping clusters live files use, until the size is covered. A
+    /// file written around a live one is recovered whole. Known limit: a
+    /// free cluster that another, also deleted, file used since looks the
+    /// same, and is taken. The walk is partial (`WalkEnd::OutOfRange`) when
+    /// the free clusters run out at the end of the volume, and empty
+    /// (`WalkEnd::Broken`) when the first cluster is in use again.
+    #[default]
+    FreeClusters,
+    /// A plain run from the first cluster, for as many clusters as the size
+    /// needs: right for a file that was not fragmented, and the walk ends
+    /// `WalkEnd::Broken` at the first cluster a live file uses.
+    Contiguous,
 }
 
 impl FatAdapter {
     pub fn new(boot: BootSector, boot_at: u64) -> Self {
-        Self { boot, boot_at }
+        Self {
+            boot,
+            boot_at,
+            guess: DeletedGuess::default(),
+        }
+    }
+
+    /// The same adapter, guessing a deleted file's clusters as `guess` says.
+    pub fn with_deleted_guess(mut self, guess: DeletedGuess) -> Self {
+        self.guess = guess;
+        self
+    }
+
+    /// How this adapter's walk of a deleted entry guesses its clusters.
+    pub fn deleted_guess(&self) -> DeletedGuess {
+        self.guess
     }
 
     /// Builds the adapter from a source, reading the primary boot sector,
@@ -1021,6 +1058,16 @@ impl SalvageAdapter for FatAdapter {
                 break WalkEnd::Cycle;
             }
             let value = self.fat_value(source, cluster);
+            if deleted
+                && self.guess == DeletedGuess::FreeClusters
+                && count > 0
+                && value.is_ok()
+                && !matches!(value, Ok(FatValue::Free))
+            {
+                // A live file's cluster: not this file's. Look further on.
+                cluster += 1;
+                continue;
+            }
             if deleted && !matches!(value, Ok(FatValue::Free)) {
                 break match value {
                     Err(unreadable) => WalkEnd::Unreadable(unreadable),
@@ -1034,8 +1081,7 @@ impl SalvageAdapter for FatAdapter {
             count += 1;
             let wanted = needed.unwrap_or(1);
             if deleted {
-                // A freed chain is gone from the FAT: the file is taken to
-                // have been stored in one run, as a formatter leaves it.
+                // A freed chain is gone from the FAT: see `DeletedGuess`.
                 if count == wanted {
                     break WalkEnd::Complete;
                 }

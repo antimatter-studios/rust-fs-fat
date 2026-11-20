@@ -27,7 +27,7 @@
 mod adapter;
 mod damage;
 
-pub use adapter::{FatAdapter, FatDetail, FoundBy};
+pub use adapter::{DeletedGuess, FatAdapter, FatDetail, FoundBy};
 
 use crate::boot::{BootSector, FatKind};
 use crate::directory::{oem_text, scan_records};

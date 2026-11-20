@@ -28,7 +28,7 @@ chains, and directory entries with long names and code page 437 short names.
   lists the boot sectors, FSInfo, each FAT copy and the root directory. `FatAdapter` holds
   geometry and no device, and answers `find_candidates` (every directory entry of every directory
   cluster, live or deleted, with its long name, checksum state and times), `walk_extents` (the FAT
-  chain, or for a deleted entry the run of clusters it was stored in), `rebuild_tree`,
+  chain, or for a deleted entry a guess: the next free clusters from its first, skipping clusters live files use, or with `DeletedGuess::Contiguous` a plain run; a free cluster another deleted file used since is a known limit), `rebuild_tree`,
   `report_damage` (boot sectors, FAT copies against each other, every FAT entry, each chain
   against its size, cross-links, lost clusters), `read_extent` and `cluster_layout`;
   materialising a plan is core's. Not offered: `EncodedExtents` (FAT stores nothing encoded) and
