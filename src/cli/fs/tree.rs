@@ -10,7 +10,6 @@ use super::target::{failure, Vol};
 use fs_core::cli::listing::{self, ListBounds};
 use fs_core::cli::CliError;
 use fs_fat32::directory::{parse_directory, DirectoryEntry};
-use fs_fat32::primitives::PrimitiveAPI;
 use fs_fat32::volume::VolumeAPI;
 use fs_fat32::{Error, FatKind};
 use std::collections::HashSet;

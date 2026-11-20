@@ -6,6 +6,9 @@
 //! checks that against the real tools). The readers here do the same and
 //! report it as a warning; a writer refuses the volume until it is repaired,
 //! and the formatter never produces one.
+// This file still uses the superseded `file`, `primitives` and `volume` traits,
+// which stay one release as deprecated wrappers; it moves to `fs_core::layers` then.
+#![allow(deprecated)]
 
 mod support;
 

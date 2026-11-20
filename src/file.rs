@@ -1,9 +1,18 @@
 use crate::directory::{parse_directory, DirectoryEntry};
-use crate::primitives::{FatValue, PrimitiveAPI};
-use crate::volume::{Volume, VolumeAPI};
+use crate::primitives::FatValue;
+use crate::volume::Volume;
 use crate::{Error, Result};
 use fs_core::BlockRead;
 
+/// The file layer this crate had before `fs_core::layers`.
+///
+/// Superseded by `fs_core::layers::FileAPI`, which [`Volume`] now also
+/// implements, with nodes and paths. This trait stays for one release as a
+/// thin wrapper over the same reads.
+#[deprecated(
+    since = "0.2.0",
+    note = "use fs_core::layers::FileAPI, implemented by fs_fat32::Volume; removed in the next release"
+)]
 pub trait FileAPI {
     fn root_directory(&self) -> Result<Vec<DirectoryEntry>>;
     fn open_file(&self, entry: &DirectoryEntry) -> Result<File<'_, Self::Device>>
@@ -12,6 +21,7 @@ pub trait FileAPI {
     type Device: BlockRead;
 }
 
+#[allow(deprecated)]
 impl<Device: BlockRead> FileAPI for Volume<Device> {
     type Device = Device;
 
@@ -29,7 +39,7 @@ impl<Device: BlockRead> FileAPI for Volume<Device> {
                 * u64::from(boot.bytes_per_sector);
             let length = u64::from(boot.root_dir_sectors) * u64::from(boot.bytes_per_sector);
             let mut bytes = vec![0; usize::try_from(length).map_err(|_| Error::Bounds)?];
-            self.read_volume_bytes(start, &mut bytes)?;
+            self.read_bytes(start, &mut bytes)?;
             Ok(parse_directory(&bytes, boot.kind)?
                 .into_iter()
                 .filter(|entry| !entry.deleted)
@@ -95,7 +105,7 @@ impl<Device: BlockRead> File<'_, Device> {
                 .clusters
                 .get(index)
                 .ok_or(Error::Invalid("short file chain"))?;
-            self.volume.read_volume_bytes(
+            self.volume.read_bytes(
                 self.volume.cluster_offset(cluster)? + within,
                 &mut output[copied..copied + chunk],
             )?;
@@ -131,9 +141,12 @@ impl<Device: BlockRead> Volume<Device> {
     }
 }
 
+// These tests exercise the superseded surface, which still has to work.
+#[allow(deprecated)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::volume::VolumeAPI;
 
     struct TestDisk(Vec<u8>);
 

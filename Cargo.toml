@@ -42,7 +42,13 @@ names = { "fs.fat" = 1 }
 licenses = ["LICENSE"]
 
 [dependencies]
-rust-fs-core = "=0.4.3"
+# `layers` is the shared VolumeAPI, PrimitiveAPI, SalvageAdapter and FileAPI
+# traits (fs_core::layers); this driver implements them in `fs_fat32::layers`.
+rust-fs-core = { version = "=0.5.0", features = ["layers"] }
+# The salvage evidence this driver defines (a candidate's detail) is plain
+# serde data, as the layers require. MIT OR Apache-2.0, already in the tree
+# through rust-fs-core's `layers` feature.
+serde = { version = "=1.0.229", features = ["derive"] }
 
 [features]
 # The command-line tool and nothing else. The plumbing it shares -- dispatch,
@@ -62,6 +68,11 @@ windows-oracle = []
 
 [[test]]
 name = "independent_validation"
+required-features = ["oracle"]
+
+# The three layers (fs_core::layers) over the same independent images.
+[[test]]
+name = "layers_oracle"
 required-features = ["oracle"]
 
 # The tool run as a process: against hand-built volumes everywhere, and, with

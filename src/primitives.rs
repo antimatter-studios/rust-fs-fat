@@ -1,4 +1,5 @@
 use crate::boot::{BootSector, FatKind};
+#[allow(deprecated)]
 use crate::volume::{Volume, VolumeAPI};
 use crate::{Error, Result};
 use fs_core::BlockRead;
@@ -14,6 +15,16 @@ pub enum FatValue {
     OutOfRange(u32),
 }
 
+/// The primitive layer this crate had before `fs_core::layers`.
+///
+/// Superseded by `fs_core::layers::PrimitiveAPI`, which [`Volume`] now also
+/// implements, with the FAT-specific reads below as inherent methods of
+/// [`Volume`]. This trait stays for one release as a thin wrapper over them.
+#[deprecated(
+    since = "0.2.0",
+    note = "use the same methods on fs_fat32::Volume and fs_core::layers::PrimitiveAPI; removed in the next release"
+)]
+#[allow(deprecated)]
 pub trait PrimitiveAPI: VolumeAPI {
     fn fat_entry_raw(&self, cluster: u32) -> Result<u32>;
     fn fat_value(&self, cluster: u32) -> Result<FatValue>;
@@ -65,11 +76,17 @@ pub fn decode_fat_entry(kind: FatKind, bytes: &[u8], cluster: u32) -> Result<u32
     Ok(value)
 }
 
-impl<Device: BlockRead> PrimitiveAPI for Volume<Device> {
-    fn fat_entry_raw(&self, cluster: u32) -> Result<u32> {
+impl<Device: BlockRead> Volume<Device> {
+    /// The raw value of a cluster's entry in the active FAT.
+    pub fn fat_entry_raw(&self, cluster: u32) -> Result<u32> {
+        self.fat_entry_raw_in(self.boot().active_fat, cluster)
+    }
+
+    /// The raw value of a cluster's entry in FAT copy `copy`.
+    pub fn fat_entry_raw_in(&self, copy: u8, cluster: u32) -> Result<u32> {
         let boot = self.boot();
         let fat_offset = (u64::from(boot.reserved_sectors)
-            + u64::from(boot.active_fat) * u64::from(boot.sectors_per_fat))
+            + u64::from(copy) * u64::from(boot.sectors_per_fat))
             * u64::from(boot.bytes_per_sector);
         let fat_size = u64::from(boot.sectors_per_fat) * u64::from(boot.bytes_per_sector);
         let entry_offset = match boot.kind {
@@ -82,7 +99,7 @@ impl<Device: BlockRead> PrimitiveAPI for Volume<Device> {
             return Err(Error::Bounds);
         }
         let mut entry = [0; 4];
-        self.read_volume_bytes(fat_offset + entry_offset, &mut entry[..size as usize])?;
+        self.read_bytes(fat_offset + entry_offset, &mut entry[..size as usize])?;
         let value = match boot.kind {
             FatKind::Fat12 => {
                 let word = u16::from_le_bytes([entry[0], entry[1]]);
@@ -98,7 +115,8 @@ impl<Device: BlockRead> PrimitiveAPI for Volume<Device> {
         Ok(value)
     }
 
-    fn fat_value(&self, cluster: u32) -> Result<FatValue> {
+    /// A cluster's entry in the active FAT, classified.
+    pub fn fat_value(&self, cluster: u32) -> Result<FatValue> {
         let boot: &BootSector = self.boot();
         Ok(classify_fat_value(
             boot.kind,
@@ -107,7 +125,9 @@ impl<Device: BlockRead> PrimitiveAPI for Volume<Device> {
         ))
     }
 
-    fn chain_candidates(&self, first: u32, limit: usize) -> Result<Vec<u32>> {
+    /// The clusters of a chain from `first`, at most `limit` of them, ending
+    /// where the chain ends, leaves the volume or loops.
+    pub fn chain_candidates(&self, first: u32, limit: usize) -> Result<Vec<u32>> {
         let mut chain = Vec::new();
         let mut seen = HashSet::new();
         let mut current = first;
@@ -122,6 +142,21 @@ impl<Device: BlockRead> PrimitiveAPI for Volume<Device> {
             }
         }
         Ok(chain)
+    }
+}
+
+#[allow(deprecated)]
+impl<Device: BlockRead> PrimitiveAPI for Volume<Device> {
+    fn fat_entry_raw(&self, cluster: u32) -> Result<u32> {
+        Volume::fat_entry_raw(self, cluster)
+    }
+
+    fn fat_value(&self, cluster: u32) -> Result<FatValue> {
+        Volume::fat_value(self, cluster)
+    }
+
+    fn chain_candidates(&self, first: u32, limit: usize) -> Result<Vec<u32>> {
+        Volume::chain_candidates(self, first, limit)
     }
 }
 

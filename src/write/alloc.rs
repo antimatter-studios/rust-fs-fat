@@ -4,7 +4,6 @@
 use super::WriteVolume;
 use crate::boot::FatKind;
 use crate::primitives::{classify_fat_value, FatValue};
-use crate::volume::VolumeAPI;
 use crate::{Error, Result};
 use fs_core::BlockDevice;
 
@@ -85,7 +84,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
         let (end, length) = entry_span(kind, last);
         let mut bytes = vec![0u8; (end + length - start) as usize];
         self.volume
-            .read_volume_bytes(self.active_fat_offset() + start, &mut bytes)?;
+            .read_bytes(self.active_fat_offset() + start, &mut bytes)?;
         Ok((first..=last)
             .map(|cluster| {
                 let (at, _) = entry_span(kind, cluster);
@@ -108,7 +107,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
             window.bytes = vec![0u8; size as usize];
             window.start = start;
             self.volume
-                .read_volume_bytes(self.active_fat_offset() + start, &mut window.bytes)?;
+                .read_bytes(self.active_fat_offset() + start, &mut window.bytes)?;
         }
         Ok(decode(
             kind,

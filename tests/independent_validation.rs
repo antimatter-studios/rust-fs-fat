@@ -8,12 +8,15 @@
 //!
 //! Needs the oracles, so it is behind the `oracle` feature and FAILS (never
 //! skips) when they cannot run. `chore test:oracle` boots the Linux test VM.
+// This file still uses the superseded `file`, `primitives` and `volume` traits,
+// which stay one release as deprecated wrappers; it moves to `fs_core::layers` then.
+#![allow(deprecated)]
 #![cfg(feature = "oracle")]
 
 use fs_core::{FileDevice, ReadOnlyDevice};
 use fs_fat32::directory::{parse_directory, scan_directory, DirectoryEntry};
 use fs_fat32::file::FileAPI;
-use fs_fat32::primitives::{FatValue, PrimitiveAPI};
+use fs_fat32::primitives::FatValue;
 use fs_fat32::volume::{open_path, open_raw_device, Volume, VolumeAPI};
 use fs_fat32::write::open_writable_path;
 use fs_fat32::{BootWarning, FatKind};

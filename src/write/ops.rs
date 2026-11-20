@@ -15,7 +15,6 @@ use super::names;
 use super::WriteVolume;
 use crate::boot::FatKind;
 use crate::timestamp::FatTimestamp;
-use crate::volume::VolumeAPI;
 use crate::{Error, Result};
 use fs_core::BlockDevice;
 
@@ -217,7 +216,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
             self.volume.cluster_offset(cluster)? + (slot % size) as u64
         };
         let mut raw = [0u8; 32];
-        self.volume.read_volume_bytes(offset, &mut raw)?;
+        self.volume.read_bytes(offset, &mut raw)?;
         if raw[0] == 0 || raw[0] == 0xE5 || raw[11] == 0x0F || raw[11] & ATTR_DIRECTORY != 0 {
             return Err(Error::StaleHandle);
         }
@@ -310,7 +309,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
                 run += 1;
             }
             let piece = ((run as u64) * cluster_size - within).min((count - done) as u64) as usize;
-            self.volume.read_volume_bytes(
+            self.volume.read_bytes(
                 self.volume.cluster_offset(chain[index])? + within,
                 &mut output[done..done + piece],
             )?;
@@ -669,7 +668,7 @@ impl<Device: BlockDevice> WriteVolume<Device> {
             };
             let offset = self.volume.cluster_offset(entry.first_cluster(kind))? + 32;
             let mut dotdot = [0u8; 32];
-            self.volume.read_volume_bytes(offset, &mut dotdot)?;
+            self.volume.read_bytes(offset, &mut dotdot)?;
             dotdot[26..28].copy_from_slice(&(parent as u16).to_le_bytes());
             if kind == FatKind::Fat32 {
                 dotdot[20..22].copy_from_slice(&((parent >> 16) as u16).to_le_bytes());
