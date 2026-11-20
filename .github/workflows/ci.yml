@@ -10,7 +10,7 @@ permissions:
 jobs:
   # One gate for both legs: a matrix job's outputs are last-writer-wins, so each
   # leg's runner is its own output, named for the leg's matrix.os.
-  gate-test:
+  test-gate:
     runs-on: antimatter-vps-gate
     timeout-minutes: 1
     outputs:
@@ -24,8 +24,8 @@ jobs:
 
   test:
     name: Rust on ${{ matrix.os }}
-    needs: gate-test
-    runs-on: ${{ needs.gate-test.outputs[matrix.os] }}
+    needs: test-gate
+    runs-on: ${{ needs.test-gate.outputs[matrix.os] }}
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +57,7 @@ jobs:
       - name: Check documentation
         run: cargo doc --locked --no-deps
 
-  gate-oracle:
+  oracle-gate:
     runs-on: antimatter-vps-gate
     timeout-minutes: 1
     outputs:
@@ -72,8 +72,8 @@ jobs:
     # natively as root on a Linux runner; locally the same tests run in the
     # Linux test VM through `chore test:oracle`.
     name: Independent oracles
-    needs: gate-oracle
-    runs-on: ${{ needs.gate-oracle.outputs.runner }}
+    needs: oracle-gate
+    runs-on: ${{ needs.oracle-gate.outputs.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -124,7 +124,7 @@ jobs:
   # [package.metadata.package-cli] declares and refuses it unless it holds
   # exactly that layout. This repository is checked out beside rust-fs-core
   # because package-cli runs in place from there, at the tag release.yml pins.
-  gate-cli:
+  cli-gate:
     runs-on: antimatter-vps-gate
     timeout-minutes: 1
     outputs:
@@ -135,8 +135,8 @@ jobs:
 
   cli:
     name: cli (the installed tool, on PATH, and its tarball)
-    needs: gate-cli
-    runs-on: ${{ needs.gate-cli.outputs.runner }}
+    needs: cli-gate
+    runs-on: ${{ needs.cli-gate.outputs.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
