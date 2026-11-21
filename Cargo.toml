@@ -44,7 +44,7 @@ licenses = ["LICENSE"]
 [dependencies]
 # `layers` is the shared VolumeAPI, PrimitiveAPI, SalvageAdapter and FileAPI
 # traits (fs_core::layers); this driver implements them in `fs_fat32::layers`.
-rust-fs-core = { version = "=0.5.0", features = ["layers"] }
+rust-fs-core = { version = "=0.5.1", features = ["layers"] }
 # The salvage evidence this driver defines (a candidate's detail) is plain
 # serde data, as the layers require. MIT OR Apache-2.0, already in the tree
 # through rust-fs-core's `layers` feature.
