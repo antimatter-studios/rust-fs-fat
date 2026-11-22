@@ -150,6 +150,28 @@ fsck_record() { # IMG NAME
 
 publish() { cp --sparse=always "$1" "$out/$2.img"; }
 
+# Partition a formatter-built volume at the conventional 1 MiB boundary.
+# The MBR and filesystem are disposable oracle inputs; only the recipe is
+# committed. This exercises the driver's physical source offset handling.
+partition() { # NAME PARTITION_TYPE
+    local name="$1" type="$2" source="$out/$name.img" target="$out/$name-partitioned.img"
+    local sectors=$(( $(stat -c %s "$source") / 512 ))
+    truncate -s $((1024 * 1024 + sectors * 512)) "$target"
+    dd if="$source" of="$target" bs=512 seek=2048 conv=notrunc status=none
+    python3 - "$target" "$sectors" "$type" <<'PY'
+import sys
+path, sectors = sys.argv[1], int(sys.argv[2])
+mbr = bytearray(512)
+entry = 446
+mbr[entry + 4] = int(sys.argv[3], 16)
+mbr[entry + 8:entry + 12] = (2048).to_bytes(4, "little")
+mbr[entry + 12:entry + 16] = sectors.to_bytes(4, "little")
+mbr[510:512] = b"\x55\xAA"
+with open(path, "r+b") as image:
+    image.write(mbr)
+PY
+}
+
 # verdict IMG NAME: whether the kernel's vfat driver mounts the image read-only
 # and mtools lists it, recorded in NAME.verdict. Neither can change the image
 # (a read-only loop mount, and mdir only reads).
@@ -240,6 +262,10 @@ damage() { # NAME KIND RECIPE
 build fat12 12 "-s 1 -S 512" 1440 512 28
 build fat16 16 "-s 4 -S 512" 16384 2048 60
 build fat32 32 "-s 1 -S 512" 40960 512 70
+
+partition fat12 01
+partition fat16 06
+partition fat32 0c
 
 for spec in "fat12 12" "fat16 16" "fat32 32"; do
     # shellcheck disable=SC2086

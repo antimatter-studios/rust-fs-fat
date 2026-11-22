@@ -268,6 +268,11 @@ oracles; `tests/cli.rs` and `tests/cli/` run it on two small volumes formatted b
 the Linux test VM (`chore test:oracle`) and in CI's `oracle` job. The formatter is checked the same way by
 `tests/format_oracle.rs` (see Formatting).
 
+`tests/independent_validation.rs` also reads each formatter-built FAT12, FAT16 and FAT32
+image from an MBR partition starting at 1 MiB, comparing its listing, file bytes and cluster
+chains with the standalone image's kernel/mtools manifest and checking the partitioned source
+remains unchanged.
+
 Not validated for reading: any Windows tool (Windows' view of written volumes is in Writing below), the macOS FAT implementation, FAT with 1024-, 2048- or
 4096-byte sectors, volumes larger than the 40 MiB fixtures, or damage beyond the recipes in
 `validation/generate.sh`. A zeroed `0x55 0xAA` signature (#8) is validated for FAT12, FAT16 and

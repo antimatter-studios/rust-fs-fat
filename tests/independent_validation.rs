@@ -127,6 +127,52 @@ fn open(name: &str) -> Vol {
     open_path(&image(name), 0).unwrap_or_else(|e| panic!("open {name}: {e}"))
 }
 
+#[test]
+fn partitioned_mkfs_images_match_the_independent_views_at_a_physical_offset() {
+    const PARTITION_OFFSET: u64 = 1024 * 1024;
+    for (base, kind) in KINDS {
+        let partitioned = format!("{base}-partitioned");
+        let before = std::fs::read(image(&partitioned)).unwrap();
+        let volume = open_path(&image(&partitioned), PARTITION_OFFSET)
+            .unwrap_or_else(|e| panic!("open {partitioned} at {PARTITION_OFFSET}: {e}"));
+        assert_eq!(volume.boot().kind, kind, "{partitioned}: variant");
+
+        let nodes = walk(&volume);
+        assert_eq!(
+            listing(&nodes),
+            expected(base),
+            "{partitioned}: listing differs from the kernel/mtools view"
+        );
+        let tree = fixtures().join(format!("{base}.tree"));
+        for (path, node) in nodes.iter().filter(|(_, node)| !node.directory) {
+            assert_eq!(
+                read_all(&volume, &node.entry).unwrap(),
+                std::fs::read(tree.join(path)).unwrap(),
+                "{partitioned}: {path}: bytes differ from oracle"
+            );
+        }
+        for fields in &records(base, "manifest")["chain"] {
+            let theirs: Vec<u32> = fields[1]
+                .split(',')
+                .filter(|cluster| !cluster.is_empty())
+                .map(|cluster| cluster.parse().unwrap())
+                .collect();
+            assert_eq!(
+                clusters_of(&volume, &nodes[&fields[0]]),
+                theirs,
+                "{partitioned}: {}: chain differs from mshowfat",
+                fields[0]
+            );
+        }
+        drop(volume);
+        assert_eq!(
+            std::fs::read(image(&partitioned)).unwrap(),
+            before,
+            "{partitioned}: read wrote to source"
+        );
+    }
+}
+
 fn clusters_of(volume: &Vol, node: &Node) -> Vec<u32> {
     let needed = node.size.div_ceil(volume.boot().cluster_size()) as usize;
     if needed == 0 {
