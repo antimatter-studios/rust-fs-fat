@@ -154,7 +154,9 @@ publish() { cp --sparse=always "$1" "$out/$2.img"; }
 # The MBR and filesystem are disposable oracle inputs; only the recipe is
 # committed. This exercises the driver's physical source offset handling.
 partition() { # NAME PARTITION_TYPE
-    local name="$1" type="$2" source="$out/$name.img" target="$out/$name-partitioned.img"
+    local name="$1" type="$2" source target
+    source="$out/$name.img"
+    target="$out/$name-partitioned.img"
     local sectors=$(( $(stat -c %s "$source") / 512 ))
     truncate -s $((1024 * 1024 + sectors * 512)) "$target"
     dd if="$source" of="$target" bs=512 seek=2048 conv=notrunc status=none
